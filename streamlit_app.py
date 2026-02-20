@@ -15,8 +15,8 @@ st.set_page_config(
 )
 
 # ─── Service URLs ──────────────────────────────────────────────────────────────
-USER_SERVICE        = "http://localhost:8011"
-ANALYTICS_SERVICE   = "http://localhost:8012"
+USER_SERVICE        = "http://localhost:8001"
+ANALYTICS_SERVICE   = "http://localhost:8002"
 VEHICLE_SERVICE     = "http://localhost:8004"
 LIDAR_SERVICE       = "http://localhost:8005"
 DUMMY_LIDAR_SERVICE = "http://localhost:8006"
