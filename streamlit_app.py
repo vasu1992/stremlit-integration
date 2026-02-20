@@ -13,11 +13,12 @@ st.set_page_config(
 )
 
 # Service URLs
-USER_SERVICE = "http://localhost:8001"
-ANALYTICS_SERVICE = "http://localhost:8002"
+USER_SERVICE = "http://localhost:8011"
+ANALYTICS_SERVICE = "http://localhost:8012"
 LOCATION_SERVICE = "http://localhost:8003"
 VEHICLE_SERVICE = "http://localhost:8004"
-LIDAR_SERVICE   = "http://localhost:8005"
+LIDAR_SERVICE       = "http://localhost:8005"
+DUMMY_LIDAR_SERVICE = "http://localhost:8006"
 
 # Title
 st.title("📊 Microservices Dashboard")
@@ -46,7 +47,7 @@ if not check_services():
 
 # Sidebar navigation
 st.sidebar.title("Navigation")
-page = st.sidebar.radio("Select Page", ["🏠 Home", "👥 Users", "📈 Analytics", "📊 Reports", "🗺️ Map", "🚗 Fleet KPIs", "📡 LiDAR"])
+page = st.sidebar.radio("Select Page", ["🏠 Home", "👥 Users", "📈 Analytics", "📊 Reports", "🗺️ Map", "🚗 Fleet KPIs", "📡 LiDAR", "🤖 LiDAR Sim"])
 
 # ==================== HOME PAGE ====================
 if page == "🏠 Home":
@@ -577,6 +578,186 @@ elif page == "📡 LiDAR":
         st.error(
             "⚠️ LiDAR service unavailable.  "
             "Start it with: `python lidar_service.py`"
+        )
+
+# ==================== DUMMY LIDAR SIM PAGE ====================
+elif page == "🤖 LiDAR Sim":
+    st.header("🤖 LiDAR Simulator — Dummy RViz Data")
+    st.caption("Synthetic 2-D laser scan: robot (▲) in a rectangular room with moving obstacles (●).")
+
+    # ── Simulation config expander ────────────────────────────────────────────
+    with st.expander("⚙️ Simulation Settings", expanded=False):
+        with st.form("lidar_sim_config_form"):
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                cfg_w = st.number_input("Room Width (m)", min_value=2.0, max_value=30.0, value=10.0, step=0.5)
+            with c2:
+                cfg_h = st.number_input("Room Height (m)", min_value=2.0, max_value=20.0, value=8.0, step=0.5)
+            with c3:
+                cfg_obs = st.number_input("Obstacles", min_value=0, max_value=10, value=3, step=1)
+            with c4:
+                cfg_noise = st.number_input("Noise Std (m)", min_value=0.0, max_value=0.5, value=0.02, step=0.01, format="%.3f")
+            if st.form_submit_button("⚙️ Apply"):
+                try:
+                    requests.post(
+                        f"{DUMMY_LIDAR_SERVICE}/config",
+                        json={"room_width": cfg_w, "room_height": cfg_h,
+                              "num_obstacles": cfg_obs, "noise_std": cfg_noise},
+                        timeout=3,
+                    )
+                    st.success("Settings applied — new scan will reflect changes.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+    try:
+        # ── Status metrics ────────────────────────────────────────────────────
+        status = requests.get(f"{DUMMY_LIDAR_SERVICE}/scan/status", timeout=2).json()
+        scan   = requests.get(f"{DUMMY_LIDAR_SERVICE}/scan/latest",  timeout=2).json()
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1:
+            st.metric("Simulator", "🟢 Running")
+        with c2:
+            st.metric("Scan Rate", f"{status['scan_rate_hz']} Hz")
+        with c3:
+            st.metric("Points / Scan", scan["point_count"] if scan else 0)
+        with c4:
+            rng = (f"{scan['range_min_measured']} – {scan['range_max_measured']} m"
+                   if scan else "—")
+            st.metric("Range (min – max)", rng)
+        with c5:
+            st.metric("Total Scans", status["scan_count"])
+
+        st.markdown("---")
+
+        # ── Point-cloud scatter plot ───────────────────────────────────────────
+        col_chart, col_info = st.columns([3, 1])
+
+        with col_chart:
+            if scan and scan.get("points"):
+                pts_df = pd.DataFrame(scan["points"])
+                room_w = scan["room"]["width"]
+                room_h = scan["room"]["height"]
+
+                # Room boundary (rectangle outline)
+                hw, hh = room_w / 2, room_h / 2
+                boundary_pts = [
+                    {"bx": -hw, "by": -hh}, {"bx":  hw, "by": -hh},
+                    {"bx":  hw, "by":  hh}, {"bx": -hw, "by":  hh},
+                    {"bx": -hw, "by": -hh},          # close the loop
+                ]
+                boundary_df = pd.DataFrame(boundary_pts)
+                boundary = (
+                    alt.Chart(boundary_df)
+                    .mark_line(color="#555555", strokeDash=[6, 3], strokeWidth=1.5)
+                    .encode(
+                        x=alt.X("bx:Q", title="X (m)"),
+                        y=alt.Y("by:Q", title="Y (m)"),
+                    )
+                )
+
+                # LiDAR point cloud
+                scatter = (
+                    alt.Chart(pts_df,
+                              title=f"Scan #{status['scan_count']}  ·  "
+                                    f"{scan['point_count']} pts  ·  "
+                                    f"{status['scan_rate_hz']} Hz")
+                    .mark_circle(size=5, opacity=0.80)
+                    .encode(
+                        x=alt.X("x:Q", title="X (m)", scale=alt.Scale(domain=[-hw - 0.5, hw + 0.5])),
+                        y=alt.Y("y:Q", title="Y (m)", scale=alt.Scale(domain=[-hh - 0.5, hh + 0.5])),
+                        color=alt.Color(
+                            "range:Q",
+                            title="Range (m)",
+                            scale=alt.Scale(scheme="redyellowgreen", reverse=True),
+                        ),
+                        tooltip=[
+                            alt.Tooltip("x:Q",         format=".3f"),
+                            alt.Tooltip("y:Q",         format=".3f"),
+                            alt.Tooltip("range:Q",     title="Range (m)", format=".3f"),
+                            alt.Tooltip("angle_deg:Q", title="Angle (°)", format=".1f"),
+                        ],
+                    )
+                    .properties(width="container", height=480)
+                )
+
+                # Robot origin marker
+                origin = (
+                    alt.Chart(pd.DataFrame({"x": [0], "y": [0]}))
+                    .mark_point(size=150, shape="triangle-up", color="#00FFFF", filled=True)
+                    .encode(x="x:Q", y="y:Q", tooltip=alt.value("Robot origin"))
+                )
+
+                # Obstacle centre markers
+                layers = [boundary, scatter, origin]
+                if scan.get("obstacles"):
+                    obs_df = pd.DataFrame(scan["obstacles"])
+                    obs_markers = (
+                        alt.Chart(obs_df)
+                        .mark_circle(size=200, color="#FF6B35", opacity=0.75, filled=True)
+                        .encode(
+                            x=alt.X("x:Q"),
+                            y=alt.Y("y:Q"),
+                            tooltip=[
+                                alt.Tooltip("x:Q", title="Obstacle X", format=".2f"),
+                                alt.Tooltip("y:Q", title="Obstacle Y", format=".2f"),
+                            ],
+                        )
+                    )
+                    layers.append(obs_markers)
+
+                st.altair_chart(
+                    alt.layer(*layers).resolve_scale(color="independent"),
+                    use_container_width=True,
+                )
+
+                # Legend note
+                st.caption(
+                    "▲ cyan = robot origin  ·  ● orange = obstacle centre  "
+                    "·  dashed grey = room boundary  ·  dots coloured by range"
+                )
+            else:
+                st.info("Waiting for first scan… (service may still be starting up)")
+
+        with col_info:
+            st.subheader("Last Scan")
+            if scan:
+                st.write(f"**Time:** {scan['timestamp']}")
+                st.write(f"**Points:** {scan['point_count']}")
+                st.write(f"**Min range:** {scan['range_min_measured']} m")
+                st.write(f"**Max range:** {scan['range_max_measured']} m")
+                st.write(f"**Room:** {scan['room']['width']} × {scan['room']['height']} m")
+                st.write(f"**Obstacles:** {len(scan.get('obstacles', []))}")
+                st.write(f"**Total scans:** {status['scan_count']}")
+            else:
+                st.write("No data yet…")
+
+        # ── Scan history ──────────────────────────────────────────────────────
+        st.subheader("Scan History — Range Statistics")
+        hist_resp = requests.get(f"{DUMMY_LIDAR_SERVICE}/scan/history", timeout=2).json()
+        hist = hist_resp.get("history", [])
+        if hist:
+            hist_df = pd.DataFrame(hist)
+            hist_df["timestamp"] = pd.to_datetime(hist_df["timestamp"])
+            st.line_chart(
+                hist_df.set_index("timestamp")[["min_range", "mean_range", "max_range"]],
+                use_container_width=True,
+            )
+        else:
+            st.info("Range history will appear after a few scans.")
+
+        # ── Auto-refresh ──────────────────────────────────────────────────────
+        st.markdown("---")
+        auto_refresh = st.toggle("Auto-refresh every 1 s", value=False)
+        if auto_refresh:
+            time.sleep(1)
+            st.rerun()
+
+    except Exception as e:
+        st.error(
+            "⚠️ Dummy LiDAR service unavailable.  "
+            "Start it with: `python dummy_lidar_service.py`"
         )
 
 st.markdown("---")
