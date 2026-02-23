@@ -15,12 +15,13 @@ st.set_page_config(
 )
 
 # ─── Service URLs ──────────────────────────────────────────────────────────────
-USER_SERVICE        = "http://localhost:8001"
-ANALYTICS_SERVICE   = "http://localhost:8002"
+USER_SERVICE        = "http://localhost:8081"
+ANALYTICS_SERVICE   = "http://localhost:8082"
 VEHICLE_SERVICE     = "http://localhost:8004"
 LIDAR_SERVICE       = "http://localhost:8005"
 DUMMY_LIDAR_SERVICE = "http://localhost:8006"
 TELEOP_SERVICE      = "http://localhost:8007"
+VIZ_SERVICE         = "http://localhost:8008"
 
 # Magdeburg fleet base coordinates (mirrors vehicle_service.py)
 _BASE_LAT = 52.1205
@@ -254,7 +255,7 @@ with st.sidebar:
     # ── Theme toggle ──
     st.markdown('<hr class="sidebar-divider">', unsafe_allow_html=True)
     _theme_label = "☀️  Light mode" if _dark else "🌙  Dark mode"
-    if st.button(_theme_label, use_container_width=True, key="theme_btn"):
+    if st.button(_theme_label, width='stretch', key="theme_btn"):
         st.session_state["theme"] = "light" if _dark else "dark"
         st.rerun()
 
@@ -308,7 +309,7 @@ if page == "🏠 Home":
             f'<div class="vcard" style="border-color:{_card_border};">',
             unsafe_allow_html=True,
         )
-        st.image("tugger train.png", use_container_width=True)
+        st.image("tugger train.png", width='stretch')
         st.markdown("""
         <div class="vcard-label">
             <div class="vcard-name">Tugger Train</div>
@@ -321,7 +322,7 @@ if page == "🏠 Home":
             f'<div class="vcard" style="border-color:{_card_border};">',
             unsafe_allow_html=True,
         )
-        st.image("cargo.jpg", use_container_width=True)
+        st.image("cargo.jpg", width='stretch')
         st.markdown("""
         <div class="vcard-label">
             <div class="vcard-name">Cargo Bike</div>
@@ -334,7 +335,7 @@ if page == "🏠 Home":
             f'<div class="vcard" style="border-color:{_card_border};">',
             unsafe_allow_html=True,
         )
-        st.image("delivery robot.jpg", use_container_width=True)
+        st.image("delivery robot.jpg", width='stretch')
         st.markdown("""
         <div class="vcard-label">
             <div class="vcard-name">Delivery Robot</div>
@@ -361,14 +362,22 @@ if page == "🏠 Home":
 
     sc1, sc2, sc3 = st.columns(3)
     with sc1:
-        _svc_chip("User Service",      USER_SERVICE,      "8011")
-        _svc_chip("Analytics Service", ANALYTICS_SERVICE, "8012")
+        _svc_chip("User Service",      USER_SERVICE,      "8081")
+        _svc_chip("Analytics Service", ANALYTICS_SERVICE, "8082")
     with sc2:
         _svc_chip("Vehicle Service",   VEHICLE_SERVICE,   "8004")
         _svc_chip("LiDAR Bridge",      LIDAR_SERVICE,     "8005")
     with sc3:
         _svc_chip("LiDAR Simulator",   DUMMY_LIDAR_SERVICE, "8006")
         _svc_chip("Teleop Service",    TELEOP_SERVICE,    "8007")
+        _svc_chip("NiceGUI Viz",       VIZ_SERVICE,       "8008")
+
+    st.markdown("")
+    st.link_button(
+        "🚀 Open Real-Time Visualization (NiceGUI)",
+        url="http://localhost:8008",
+        width='content',
+    )
 
     st.markdown("---")
 
@@ -433,7 +442,7 @@ elif page == "👥 Users":
 
         if users:
             df = pd.DataFrame(users)
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df, width='stretch')
         else:
             st.info("No users found. Create one above!")
     except Exception as e:
@@ -492,7 +501,7 @@ elif page == "📈 Analytics":
 
         if events:
             df = pd.DataFrame(events)
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df, width='stretch')
             st.subheader("Value Trend")
             chart_df = df[["timestamp", "value"]].copy()
             chart_df["timestamp"] = pd.to_datetime(chart_df["timestamp"])
@@ -564,12 +573,12 @@ elif page == "🚗 Fleet KPIs":
                 )
                 .properties(width=280, height=280)
             )
-            st.altair_chart(pie, use_container_width=True)
+            st.altair_chart(pie, width='stretch')
 
         with col_bat:
             st.subheader("Battery Levels (%)")
             bat_df = df_v[["id", "battery"]].set_index("id")
-            st.bar_chart(bat_df, color="#4B6BFF", use_container_width=True)
+            st.bar_chart(bat_df, color="#4B6BFF", width='stretch')
 
         st.subheader("Speed Trend (km/h)")
         hdata   = api_get(f"{VEHICLE_SERVICE}/fleet/history")
@@ -580,7 +589,7 @@ elif page == "🚗 Fleet KPIs":
             speed_pivot = hist_df.pivot_table(
                 index="timestamp", columns="vehicle_id", values="speed", aggfunc="mean"
             )
-            st.line_chart(speed_pivot, use_container_width=True)
+            st.line_chart(speed_pivot, width='stretch')
         else:
             st.info("No history yet — click **▶ Simulate New Readings** to generate data.")
 
@@ -598,7 +607,7 @@ elif page == "🚗 Fleet KPIs":
             "ID", "Name", "Status", "Speed (km/h)", "Battery (%)",
             "CPU (%)", "Sensor Health", "Distance (km)", "Last Updated",
         ]
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        st.dataframe(display_df, width='stretch', hide_index=True)
 
         # ── Per-vehicle actions (deregister) ──────────────────────────────────
         with st.expander("🗑️ Deregister a Vehicle", expanded=False):
@@ -728,7 +737,7 @@ elif page == "📡 LiDAR":
                     .mark_point(size=120, shape="triangle-up", color="#00FFFF", filled=True)
                     .encode(x="x:Q", y="y:Q")
                 )
-                st.altair_chart(scatter + origin, use_container_width=True)
+                st.altair_chart(scatter + origin, width='stretch')
             else:
                 st.info(
                     "No scan data yet.\n\n"
@@ -758,7 +767,7 @@ elif page == "📡 LiDAR":
             hist_df["timestamp"] = pd.to_datetime(hist_df["timestamp"])
             st.line_chart(
                 hist_df.set_index("timestamp")[["min_range", "mean_range", "max_range"]],
-                use_container_width=True,
+                width='stretch',
             )
         else:
             st.info("History will appear after the first scan is received.")
@@ -884,7 +893,7 @@ elif page == "🤖 LiDAR Sim":
 
                 st.altair_chart(
                     alt.layer(*layers).resolve_scale(color="independent"),
-                    use_container_width=True,
+                    width='stretch',
                 )
                 st.caption(
                     "▲ cyan = robot origin  ·  ● orange = obstacle centre  "
@@ -914,7 +923,7 @@ elif page == "🤖 LiDAR Sim":
             hist_df["timestamp"] = pd.to_datetime(hist_df["timestamp"])
             st.line_chart(
                 hist_df.set_index("timestamp")[["min_range", "mean_range", "max_range"]],
-                use_container_width=True,
+                width='stretch',
             )
         else:
             st.info("Range history will appear after a few scans.")
@@ -1008,7 +1017,7 @@ elif page == "🕹️ Teleop":
                     if h_lat and h_lon:
                         st.caption(f"Home: {h_lat:.6f}°N, {h_lon:.6f}°E")
                 with ci2:
-                    if st.button("🔌 Disconnect", use_container_width=True, key="disc_btn"):
+                    if st.button("🔌 Disconnect", width='stretch', key="disc_btn"):
                         try:
                             requests.post(f"{TELEOP_SERVICE}/robot/disconnect", timeout=3)
                             requests.post(
@@ -1035,7 +1044,7 @@ elif page == "🕹️ Teleop":
                     chosen = sel_map[chosen_lbl]
                     if st.button(
                         "\U0001f3ae Connect & Take Control", type="primary",
-                        key="conn_btn", use_container_width=True,
+                        key="conn_btn", width='stretch',
                     ):
                         try:
                             requests.post(
@@ -1112,17 +1121,17 @@ elif page == "🕹️ Teleop":
             st.markdown("**D-Pad**")
             _, fc, _ = st.columns([1, 1, 1])
             with fc:
-                if st.button("⬆️ Fwd", use_container_width=True,
+                if st.button("⬆️ Fwd", width='stretch',
                              disabled=(state["status"] == "E-Stop")):
                     _send_vel(lin_speed, 0.0)
 
             lc, mc, rc = st.columns(3)
             with lc:
-                if st.button("⬅️ Left", use_container_width=True,
+                if st.button("⬅️ Left", width='stretch',
                              disabled=(state["status"] == "E-Stop")):
                     _send_vel(0.0, turn_speed)
             with mc:
-                if st.button("⏹️ Stop", use_container_width=True):
+                if st.button("⏹️ Stop", width='stretch'):
                     requests.post(f"{TELEOP_SERVICE}/robot/stop", timeout=3)
                     if connected_to:
                         try:
@@ -1141,13 +1150,13 @@ elif page == "🕹️ Teleop":
                     api_get.clear()
                     st.rerun()
             with rc:
-                if st.button("➡️ Right", use_container_width=True,
+                if st.button("➡️ Right", width='stretch',
                              disabled=(state["status"] == "E-Stop")):
                     _send_vel(0.0, -turn_speed)
 
             _, bc, _ = st.columns([1, 1, 1])
             with bc:
-                if st.button("⬇️ Back", use_container_width=True,
+                if st.button("⬇️ Back", width='stretch',
                              disabled=(state["status"] == "E-Stop")):
                     _send_vel(-lin_speed, 0.0)
 
@@ -1155,21 +1164,21 @@ elif page == "🕹️ Teleop":
             st.markdown("**Diagonal**")
             dl, dr = st.columns(2)
             with dl:
-                if st.button("↖️ Fwd-L", use_container_width=True,
+                if st.button("↖️ Fwd-L", width='stretch',
                              disabled=(state["status"] == "E-Stop")):
                     _send_vel(lin_speed, turn_speed)
             with dr:
-                if st.button("↗️ Fwd-R", use_container_width=True,
+                if st.button("↗️ Fwd-R", width='stretch',
                              disabled=(state["status"] == "E-Stop")):
                     _send_vel(lin_speed, -turn_speed)
 
             st.markdown("---")
-            if st.button("🚨 EMERGENCY STOP", use_container_width=True, type="primary"):
+            if st.button("🚨 EMERGENCY STOP", width='stretch', type="primary"):
                 requests.post(f"{TELEOP_SERVICE}/robot/estop", timeout=3)
                 api_get.clear()
                 st.rerun()
 
-            if st.button("🔄 Reset to Origin", use_container_width=True):
+            if st.button("🔄 Reset to Origin", width='stretch'):
                 requests.post(f"{TELEOP_SERVICE}/robot/reset", timeout=3)
                 if connected_to:
                     try:
@@ -1274,7 +1283,7 @@ elif page == "🕹️ Teleop":
                         ),
                     )
                 )
-                st.altair_chart(chart, use_container_width=True)
+                st.altair_chart(chart, width='stretch')
                 st.caption("● red = robot (arrow = heading)  ◆ grey = origin  — blue = path")
             else:
                 st.info("Move the robot to see its trail here.")
@@ -1285,7 +1294,7 @@ elif page == "🕹️ Teleop":
         if hist:
             hist_df = pd.DataFrame(list(reversed(hist)))
             hist_df.columns = [c.replace("_", " ").title() for c in hist_df.columns]
-            st.dataframe(hist_df, use_container_width=True, hide_index=True)
+            st.dataframe(hist_df, width='stretch', hide_index=True)
         else:
             st.info("No commands sent yet — use the D-pad controls above.")
 
