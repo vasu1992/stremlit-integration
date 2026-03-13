@@ -5,6 +5,8 @@ import altair as alt
 import math
 import time
 from datetime import datetime
+import paho.mqtt.client as mqtt
+import ssl
 
 # ─── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -22,6 +24,32 @@ TELEOP_SERVICE      = "http://localhost:8007"
 TRAFFIC_SERVICE     = "http://localhost:8009"
 CAMERA_SERVICE      = "http://localhost:8010"
 ROBOT_SERVICE       = "http://localhost:8083"
+
+# ─── MQTT HiveMQ Config ───────────────────────────────────────────────────────
+MQTT_BROKER   = "ba941e31dbdd499594f2771c07004e2d.s1.eu.hivemq.cloud"
+MQTT_PORT     = 8883
+MQTT_USER     = "occ_MQTT"
+MQTT_PASS     = "OCc@1234"
+MQTT_TOPIC    = "OCC/rasp_disp"
+MQTT_DEFAULT  = "OCC is online"
+
+
+def mqtt_publish(message: str) -> tuple[bool, str]:
+    """Publish a single message to MQTT broker with TLS. Returns (success, info)."""
+    try:
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        client.username_pw_set(MQTT_USER, MQTT_PASS)
+        client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLS_CLIENT)
+        client.connect(MQTT_BROKER, MQTT_PORT, keepalive=10)
+        result = client.publish(MQTT_TOPIC, message, qos=1)
+        result.wait_for_publish(timeout=5)
+        client.disconnect()
+        if result.rc == mqtt.MQTT_ERR_SUCCESS:
+            return True, f"Published to `{MQTT_TOPIC}`"
+        return False, f"Publish error code: {result.rc}"
+    except Exception as exc:
+        return False, str(exc)
+
 
 # Magdeburg fleet base coordinates (mirrors vehicle_service.py)
 _BASE_LAT = 52.1205
@@ -325,47 +353,126 @@ if page == "🏠 Home":
 
     st.markdown("")  # spacer
 
-    # ── Service status ────────────────────────────────────────────────────────
-    st.markdown("#### Service Health")
+    # ── Service status & Live Statistics (on-demand) ─────────────────────────
+    if "home_stats_loaded" not in st.session_state:
+        st.session_state["home_stats_loaded"] = False
 
-    def _svc_chip(label: str, url: str, port_label: str) -> None:
-        data = api_get(f"{url}/")
-        ok = data is not None
-        dot = "🟢" if ok else "🔴"
-        cls = "svc-ok" if ok else "svc-err"
-        txt = "Running" if ok else "Offline"
-        st.markdown(
-            f'<div class="svc-chip {cls}">{dot}&nbsp; <b>{label}</b> &nbsp;— {txt} &nbsp;'
-            f'<span style="opacity:.6;font-size:.77rem;">[{port_label}]</span></div>',
-            unsafe_allow_html=True,
-        )
+    if not st.session_state["home_stats_loaded"]:
+        if st.button("🔍 Load Service Health & Live Statistics"):
+            st.session_state["home_stats_loaded"] = True
+            st.rerun()
+    else:
+        st.markdown("#### Service Health")
 
-    sc1, sc2, sc3 = st.columns(3)
-    with sc1:
-        _svc_chip("Vehicle Service",   VEHICLE_SERVICE,   "8004")
-        _svc_chip("LiDAR Bridge",      LIDAR_SERVICE,     "8005")
-    with sc2:
-        _svc_chip("LiDAR Simulator",   DUMMY_LIDAR_SERVICE, "8006")
-        _svc_chip("Teleop Service",    TELEOP_SERVICE,    "8007")
-    with sc3:
-        _svc_chip("Traffic Service",   TRAFFIC_SERVICE,   "8009")
-        _svc_chip("Camera Service",    CAMERA_SERVICE,    "8010")
-        _svc_chip("Robot Service",     ROBOT_SERVICE,     "8083")
+        def _svc_chip(label: str, url: str, port_label: str) -> None:
+            data = api_get(f"{url}/")
+            ok = data is not None
+            dot = "🟢" if ok else "🔴"
+            cls = "svc-ok" if ok else "svc-err"
+            txt = "Running" if ok else "Offline"
+            st.markdown(
+                f'<div class="svc-chip {cls}">{dot}&nbsp; <b>{label}</b> &nbsp;— {txt} &nbsp;'
+                f'<span style="opacity:.6;font-size:.77rem;">[{port_label}]</span></div>',
+                unsafe_allow_html=True,
+            )
+
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            _svc_chip("Vehicle Service",   VEHICLE_SERVICE,   "8004")
+            _svc_chip("LiDAR Bridge",      LIDAR_SERVICE,     "8005")
+        with sc2:
+            _svc_chip("LiDAR Simulator",   DUMMY_LIDAR_SERVICE, "8006")
+            _svc_chip("Teleop Service",    TELEOP_SERVICE,    "8007")
+        with sc3:
+            _svc_chip("Traffic Service",   TRAFFIC_SERVICE,   "8009")
+            _svc_chip("Camera Service",    CAMERA_SERVICE,    "8010")
+            _svc_chip("Robot Service",     ROBOT_SERVICE,     "8083")
+
+        st.markdown("---")
+
+        # ── Quick stats ──────────────────────────────────────────────────────
+        st.markdown("#### Live Statistics")
+        sq1, sq2 = st.columns(2)
+        try:
+            kpis = api_get(f"{VEHICLE_SERVICE}/fleet/kpis")
+
+            with sq1:
+                st.metric("🚗 Active AVs",  kpis["active"] if kpis else "—")
+            with sq2:
+                st.metric("🔋 Avg Battery", f"{kpis['avg_battery_pct']} %" if kpis else "—")
+        except Exception as e:
+            st.error(f"Error loading statistics: {e}")
+
+        if st.button("🔄 Refresh"):
+            st.rerun()
 
     st.markdown("---")
 
-    # ── Quick stats ──────────────────────────────────────────────────────────
-    st.markdown("#### Live Statistics")
-    sq1, sq2 = st.columns(2)
-    try:
-        kpis = api_get(f"{VEHICLE_SERVICE}/fleet/kpis")
+    # ── Raspberry Pi Display Broadcaster ─────────────────────────────────────
+    st.markdown("#### 📡 Raspberry Pi Display")
 
-        with sq1:
-            st.metric("🚗 Active AVs",  kpis["active"] if kpis else "—")
-        with sq2:
-            st.metric("🔋 Avg Battery", f"{kpis['avg_battery_pct']} %" if kpis else "—")
-    except Exception as e:
-        st.error(f"Error loading statistics: {e}")
+    _disp_border = _border_dark if _dark else _border_light
+    st.markdown(
+        f'<div style="border:1px solid {_disp_border}; border-radius:10px; padding:1.1rem 1.3rem 0.8rem 1.3rem; margin-bottom:0.5rem;">',
+        unsafe_allow_html=True,
+    )
+
+    if "mqtt_msg_input" not in st.session_state:
+        st.session_state["mqtt_msg_input"] = MQTT_DEFAULT
+    if "mqtt_last_status" not in st.session_state:
+        st.session_state["mqtt_last_status"] = None
+    if "mqtt_last_ok" not in st.session_state:
+        st.session_state["mqtt_last_ok"] = None
+
+    disp_col1, disp_col2 = st.columns([4, 1], gap="small")
+
+    with disp_col1:
+        msg_input = st.text_input(
+            "Message to display on Pi",
+            value=st.session_state["mqtt_msg_input"],
+            placeholder="Type a message…",
+            key="mqtt_text_input_widget",
+            label_visibility="collapsed",
+        )
+
+    with disp_col2:
+        send_clicked = st.button("📤 Send", use_container_width=True, type="primary")
+
+    preset_col1, preset_col2, preset_col3, preset_col4 = st.columns(4, gap="small")
+    with preset_col1:
+        if st.button("✅ OCC is online",       use_container_width=True):
+            st.session_state["mqtt_msg_input"] = "OCC is online"
+            st.rerun()
+    with preset_col2:
+        if st.button("⚠️ Stand by",            use_container_width=True):
+            st.session_state["mqtt_msg_input"] = "Stand by"
+            st.rerun()
+    with preset_col3:
+        if st.button("🚧 Route closed",         use_container_width=True):
+            st.session_state["mqtt_msg_input"] = "Route closed"
+            st.rerun()
+    with preset_col4:
+        if st.button("🔴 Emergency stop",       use_container_width=True):
+            st.session_state["mqtt_msg_input"] = "Emergency stop"
+            st.rerun()
+
+    if send_clicked:
+        payload = msg_input.strip() or MQTT_DEFAULT
+        with st.spinner("Publishing…"):
+            ok, info = mqtt_publish(payload)
+        st.session_state["mqtt_last_ok"]     = ok
+        st.session_state["mqtt_last_status"] = info
+        if ok:
+            st.session_state["mqtt_msg_input"] = payload
+
+    if st.session_state["mqtt_last_status"] is not None:
+        if st.session_state["mqtt_last_ok"]:
+            st.success(f"✅ {st.session_state['mqtt_last_status']}")
+        else:
+            st.error(f"❌ {st.session_state['mqtt_last_status']}")
+
+    st.caption(f"Broker: `{MQTT_BROKER}:{MQTT_PORT}` · Topic: `{MQTT_TOPIC}` · QoS 1")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ==================== FLEET KPIs PAGE ====================
