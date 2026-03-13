@@ -1,6 +1,6 @@
 # Operations Control Center
 
-A microservices-based autonomous logistics platform with two complementary dashboards — a **Streamlit** operations dashboard and a **NiceGUI** real-time visualization app — covering user management, event analytics, AV fleet telemetry (Magdeburg, Germany), live LiDAR visualization via ROS/rosbridge, a built-in LiDAR simulator, and a teleoperation interface with fleet integration. No real robot required.
+A microservices-based autonomous logistics platform with two complementary dashboards — a **Streamlit** operations dashboard and a **NiceGUI** real-time visualization app — covering user management, event analytics, AV fleet telemetry (Magdeburg, Germany), live LiDAR visualization via ROS/rosbridge, a built-in LiDAR simulator, a teleoperation interface with fleet integration, and a **live robot telemetry bridge** for Innok Robotics cloud-connected robots. No real robot required for most features.
 
 ---
 
@@ -16,6 +16,7 @@ A microservices-based autonomous logistics platform with two complementary dashb
 ├── lidar_service.py          # RViz LiDAR bridge service          (Port 8005)
 ├── dummy_lidar_service.py    # Dummy LiDAR simulator service      (Port 8006)
 ├── teleop_service.py         # Teleoperation interface service    (Port 8007)
+├── robot_telemetry_service.py# Innok Robotics cloud telemetry    (Port 8083)
 ├── tugger train.png          # Home page vehicle image
 ├── cargo.jpg                 # Home page vehicle image
 ├── delivery robot.jpg        # Home page vehicle image
@@ -116,6 +117,39 @@ Simulates remote control of a differential-drive robot with fleet vehicle integr
 
 **GPS tracking:** When connected to a fleet vehicle, the robot's local x/y displacement is converted to absolute GPS (lat/lon) and synced back to the vehicle service after every movement command.
 
+### Robot Telemetry Service — Port 8083
+
+Bridges an **Innok Robotics** cloud-connected robot to the local platform by polling the Innok REST API and caching the latest diagnostics and position data. Also accepts light-control commands that are forwarded to the robot's cloud API. Credentials are loaded from environment variables at startup and can be updated at runtime without restarting.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Health check + connection state |
+| `/robot/status` | GET | Connection state, last poll timestamp, any error |
+| `/robot/diagnostics` | GET | Latest diagnostics (level, name, message, hardware_id, values) |
+| `/robot/position` | GET | Latest pose — translation `{x,y,z}` + rotation quaternion `{x,y,z,w}` |
+| `/robot/light` | GET | Current light state (`on` / `off`) and when it was last set |
+| `/robot/light` | POST | Set light `{"state": "on"\|"off"}` — forwards to robot API and caches state |
+| `/robot/poll` | POST | Trigger an immediate poll now |
+| `/robot/config` | GET | Current config (password/apikey masked) |
+| `/robot/config` | POST | Update credentials or poll interval at runtime |
+
+**Innok API endpoints polled:**
+- `GET /state/diagnostics?apikey=...` — hardware component status with key/value metrics
+- `GET /state/position?apikey=...` — robot pose in a reference frame
+
+**Credential environment variables:**
+
+| Variable | Description |
+|----------|-------------|
+| `INNOK_TENANT` | Subdomain, e.g. `myrobot` → `myrobot.cloud.innok-robotics.de` |
+| `INNOK_USER` | HTTP Basic auth username |
+| `INNOK_PASSWORD` | HTTP Basic auth password |
+| `INNOK_APIKEY` | `?apikey=` query parameter |
+| `INNOK_POLL_INTERVAL` | Polling interval in seconds (default `5`) |
+| `INNOK_VERIFY_SSL` | Set to `false` to skip TLS verification (default `true`) |
+
+**Diagnostics level codes:** `0` = OK · `1` = WARN · `2` = ERROR
+
 ### NiceGUI Visualization App — Port 8008
 Real-time visualization dashboard with three auto-refreshing tabs.
 
@@ -138,6 +172,7 @@ Real-time visualization dashboard with three auto-refreshing tabs.
 | 📡 **LiDAR** | Live LiDAR point cloud from rosbridge, scan statistics, history chart |
 | 🤖 **LiDAR Sim** | Synthetic RViz-style point cloud: room boundary, range-coloured scan points, obstacle markers, live config, auto-refresh |
 | 🕹️ **Teleop** | Fleet vehicle connection panel, D-pad controls, camera feeds (4× synthetic SVG), robot trail chart, command history table, GPS sync to fleet map |
+| 🦾 **Robot** | Light on/off toggle (forwards command to Innok REST API), live position (translation + quaternion), diagnostics table with per-component status, credential config form |
 
 ---
 
@@ -175,13 +210,45 @@ python teleop_service.py        # → http://localhost:8007
 # Terminal 7  (optional — real-time NiceGUI visualization)
 python viz_app.py               # → http://localhost:8008
 
-# Terminal 8  (Streamlit dashboard)
+# Terminal 8  (optional — Innok Robotics cloud robot bridge)
+INNOK_TENANT=myrobot INNOK_USER=user INNOK_PASSWORD=pass INNOK_APIKEY=XXXXX \
+python robot_telemetry_service.py   # → http://localhost:8083
+
+# Terminal 9  (Streamlit dashboard)
 streamlit run streamlit_app.py  # → http://localhost:8501
 ```
 
 > The Streamlit dashboard requires **User Service (8081)** and **Analytics Service (8082)** to be running. All other services are handled gracefully — the rest of the dashboard works if they are offline.
+>
+> The Robot Telemetry Service can also be started without credentials — configure them later at runtime via `POST /robot/config`.
 
-### 3. LiDAR Setup (Real Robot Only)
+### 3. Innok Robotics Setup (Real Robot Only)
+
+If you have an Innok Robotics cloud robot, configure credentials via env vars or at runtime:
+
+```bash
+# Option A — env vars at startup
+INNOK_TENANT=myrobot INNOK_USER=user INNOK_PASSWORD=pass INNOK_APIKEY=XXXXX \
+python robot_telemetry_service.py
+
+# Option B — runtime config (start first, configure later)
+python robot_telemetry_service.py
+
+curl -X POST http://localhost:8083/robot/config \
+  -H "Content-Type: application/json" \
+  -d '{"tenant":"myrobot","username":"user","password":"pass","apikey":"XXXXX"}'
+
+# Check connection status
+curl http://localhost:8083/robot/status
+
+# Fetch diagnostics
+curl http://localhost:8083/robot/diagnostics
+
+# Fetch position
+curl http://localhost:8083/robot/position
+```
+
+### 4. LiDAR Setup (Real Robot Only)
 
 On the ROS robot:
 ```bash
@@ -196,7 +263,7 @@ Then open **📡 LiDAR** in the dashboard → **⚙️ Connection Settings** →
 
 > For LiDAR without a robot, use **🤖 LiDAR Sim** instead.
 
-### 4. Teleop Fleet Integration
+### 5. Teleop Fleet Integration
 
 1. Start `vehicle_service.py` and `teleop_service.py`
 2. Navigate to **🕹️ Teleop** in the Streamlit dashboard
@@ -232,6 +299,18 @@ Then open **📡 LiDAR** in the dashboard → **⚙️ Connection Settings** →
 │                 NiceGUI Real-Time Visualization  (Port 8008)                 │
 │           Fleet Map  ·  Teleop Cameras + Trail  ·  LiDAR Point Cloud        │
 └──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│              Robot Telemetry Service  (Port 8009)                            │
+│  Polls Innok Robotics cloud API · caches diagnostics + position              │
+└───────────────────────────────┬──────────────────────────────────────────────┘
+                                │ HTTPS / REST (polling)
+                    ┌───────────▼───────────┐
+                    │  Innok Robotics Cloud  │
+                    │  <tenant>.cloud.       │
+                    │  innok-robotics.de     │
+                    │  /api/v1/state/...     │
+                    └────────────────────────┘
 ```
 
 ---
@@ -272,6 +351,33 @@ curl "http://localhost:8006/scan/latest"
 curl -X POST "http://localhost:8006/config" \
   -H "Content-Type: application/json" \
   -d '{"room_width": 16.0, "room_height": 12.0, "num_obstacles": 5, "noise_std": 0.03}'
+
+# Configure Innok robot credentials at runtime
+curl -X POST "http://localhost:8083/robot/config" \
+  -H "Content-Type: application/json" \
+  -d '{"tenant":"myrobot","username":"user","password":"pass","apikey":"XXXXX"}'
+
+# Get robot diagnostics
+curl "http://localhost:8083/robot/diagnostics"
+
+# Get robot position
+curl "http://localhost:8083/robot/position"
+
+# Trigger an immediate poll
+curl -X POST "http://localhost:8083/robot/poll"
+
+# Turn robot light on
+curl -X POST "http://localhost:8083/robot/light" \
+  -H "Content-Type: application/json" \
+  -d '{"state": "on"}'
+
+# Turn robot light off
+curl -X POST "http://localhost:8083/robot/light" \
+  -H "Content-Type: application/json" \
+  -d '{"state": "off"}'
+
+# Get current light state
+curl "http://localhost:8083/robot/light"
 ```
 
 ---
@@ -285,6 +391,7 @@ curl -X POST "http://localhost:8006/config" \
 | pydantic | All services |
 | websockets | lidar_service.py |
 | requests | streamlit_app.py, viz_app.py |
+| httpx | robot_telemetry_service.py |
 | streamlit | streamlit_app.py |
 | pandas | streamlit_app.py |
 | altair | streamlit_app.py |
@@ -293,7 +400,8 @@ curl -X POST "http://localhost:8006/config" \
 
 Install all at once:
 ```bash
-pip install fastapi uvicorn pydantic websockets requests streamlit pandas altair nicegui plotly
+pip install -r requirements.txt
+# plus: nicegui plotly altair
 ```
 
 ---
@@ -313,3 +421,6 @@ pip install fastapi uvicorn pydantic websockets requests streamlit pandas altair
 | NiceGUI Viz page blank / error | Start `viz_app.py` then open `http://localhost:8008`. |
 | "Port already in use" | Another process holds the port. Kill it: `python -c "import subprocess; subprocess.run(['taskkill','/F','/IM','python.exe'])"` (Windows) or `pkill python` (Linux/Mac). |
 | Streamlit doesn't open browser | Navigate manually to `http://localhost:8501`. |
+| Robot service shows "unconfigured" | No credentials set yet — `POST /robot/config` with `tenant`, `username`, `password`, `apikey`. |
+| Robot service shows "error" | Check `GET /robot/status` for the error message. Verify credentials, tenant name, and network access to `*.cloud.innok-robotics.de`. |
+| Robot position returns 503 "not yet available" | First poll hasn't succeeded yet — trigger one with `POST /robot/poll`. |

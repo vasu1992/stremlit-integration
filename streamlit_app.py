@@ -24,6 +24,7 @@ TELEOP_SERVICE      = "http://localhost:8007"
 VIZ_SERVICE         = "http://localhost:8008"
 TRAFFIC_SERVICE     = "http://localhost:8009"
 CAMERA_SERVICE      = "http://localhost:8010"
+ROBOT_SERVICE       = "http://localhost:8083"
 
 # Magdeburg fleet base coordinates (mirrors vehicle_service.py)
 _BASE_LAT = 52.1205
@@ -253,6 +254,7 @@ with st.sidebar:
         "🕹️ Teleop",
         "🚦 Traffic Lights",
         "📷 Camera",
+        "🦾 Robot",
     ]
     page = st.radio("nav", _all_pages, label_visibility="collapsed", key="radio_nav")
 
@@ -283,6 +285,7 @@ _PAGE_ICONS = {
     "🤖 LiDAR Sim": ("🤖", "LiDAR Simulator — Synthetic Scan"),
     "🕹️ Teleop":    ("🕹️", "Teleoperation Interface"),
     "🚦 Traffic Lights": ("🚦", "Traffic Light Monitor — MQTT"),
+    "🦾 Robot":          ("🦾", "Robot Control & Telemetry — Innok Robotics"),
 }
 _icon, _title = _PAGE_ICONS.get(page, ("🎯", page))
 
@@ -1603,6 +1606,199 @@ elif page == "📷 Camera":
             st.image(img_bytes, caption=f"Snapshot at {ts}", width='stretch')
         except Exception as e:
             st.error(f"Snapshot failed: {e}")
+
+
+# ==================== ROBOT PAGE ====================
+elif page == "🦾 Robot":
+
+    # ── Service health ──────────────────────────────────────────────────────────
+    robot_health = api_get(f"{ROBOT_SERVICE}/")
+    if robot_health is None:
+        st.error("⚠️ Robot Telemetry Service is offline. Start it with: `python robot_telemetry_service.py`")
+        st.stop()
+
+    # ── Connection status chip ──────────────────────────────────────────────────
+    conn       = robot_health.get("robot_connection", "unconfigured")
+    configured = robot_health.get("configured", False)
+    _conn_colors = {
+        "connected":    ("svc-ok",  "Connected"),
+        "polling":      ("svc-warn","Polling…"),
+        "error":        ("svc-err", "Error"),
+        "unconfigured": ("svc-err", "Unconfigured"),
+    }
+    _chip_cls, _chip_lbl = _conn_colors.get(conn, ("svc-err", conn.title()))
+    st.markdown(
+        f'<span class="svc-chip {_chip_cls}">⬤ Robot {_chip_lbl}</span>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("---")
+
+    col_ctrl, col_telem = st.columns([1, 2], gap="large")
+
+    # ── LEFT: Light control + config ────────────────────────────────────────────
+    with col_ctrl:
+        st.subheader("💡 Light Control")
+
+        light_data = api_get(f"{ROBOT_SERVICE}/robot/light")
+        current_light = (light_data or {}).get("light", "off")
+        light_updated = (light_data or {}).get("light_updated_at")
+
+        _light_on = current_light == "on"
+        _bulb = "💡" if _light_on else "🔦"
+        _light_color = "#d29922" if _light_on else "#666"
+        st.markdown(
+            f"""<div style="text-align:center; padding:1.2rem 0 0.6rem 0;">
+                <div style="font-size:3rem; line-height:1;">{_bulb}</div>
+                <div style="font-size:1.1rem; font-weight:700; color:{_light_color};
+                            margin-top:6px; letter-spacing:1px;">
+                    {"ON" if _light_on else "OFF"}
+                </div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+        if light_updated:
+            st.caption(f"Last changed: {light_updated[11:19]}")
+
+        _btn_label = "🔦 Turn OFF" if _light_on else "💡 Turn ON"
+        _new_state  = "off" if _light_on else "on"
+        if st.button(_btn_label, key="light_toggle", width='stretch'):
+            try:
+                resp = requests.post(
+                    f"{ROBOT_SERVICE}/robot/light",
+                    json={"state": _new_state},
+                    timeout=5,
+                )
+                result = resp.json()
+                if result.get("api_error"):
+                    st.warning(
+                        f"Light set to **{_new_state}** locally, "
+                        f"but robot API error: `{result['api_error']}`"
+                    )
+                else:
+                    st.success(f"Light turned **{_new_state}**.")
+                api_get.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(f"Command failed: {e}")
+
+        st.markdown("---")
+        st.subheader("⚙️ Robot Credentials")
+
+        status_data = api_get(f"{ROBOT_SERVICE}/robot/status")
+        status      = status_data or {}
+        cfg_data    = api_get(f"{ROBOT_SERVICE}/robot/config")
+        cfg         = cfg_data or {}
+
+        st.caption(
+            f"Tenant: **{cfg.get('tenant') or '—'}**  "
+            f"· Poll: **{cfg.get('poll_interval_seconds', 5)}s**  "
+            f"· SSL verify: **{cfg.get('verify_ssl', True)}**"
+        )
+        if status.get("error"):
+            st.error(f"Last error: `{status['error']}`")
+
+        with st.expander("Configure credentials"):
+            with st.form("robot_config_form"):
+                f_tenant   = st.text_input("Tenant (subdomain)",   value=cfg.get("tenant", ""))
+                f_user     = st.text_input("Username",              value=cfg.get("username", ""))
+                f_pass     = st.text_input("Password",              type="password")
+                f_apikey   = st.text_input("API Key",               type="password")
+                f_interval = st.number_input("Poll interval (s)",   min_value=2, max_value=60,
+                                             value=int(cfg.get("poll_interval_seconds", 5)))
+                f_ssl      = st.checkbox("Verify SSL", value=cfg.get("verify_ssl", True))
+                if st.form_submit_button("💾 Save & Reconnect", type="primary"):
+                    payload: dict = {"poll_interval_seconds": f_interval, "verify_ssl": f_ssl}
+                    if f_tenant: payload["tenant"]   = f_tenant
+                    if f_user:   payload["username"] = f_user
+                    if f_pass:   payload["password"] = f_pass
+                    if f_apikey: payload["apikey"]   = f_apikey
+                    try:
+                        r = requests.post(f"{ROBOT_SERVICE}/robot/config",
+                                          json=payload, timeout=6)
+                        res = r.json()
+                        if res.get("connection") == "connected":
+                            st.success("Connected!")
+                        else:
+                            st.warning(f"Status: {res.get('connection')} — {res.get('error') or ''}")
+                        api_get.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Config update failed: {e}")
+
+        if st.button("🔄 Poll now", key="robot_poll"):
+            try:
+                requests.post(f"{ROBOT_SERVICE}/robot/poll", timeout=8)
+                api_get.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(f"Poll failed: {e}")
+
+    # ── RIGHT: Telemetry data ────────────────────────────────────────────────────
+    with col_telem:
+        # ── Position ────────────────────────────────────────────────────────────
+        st.subheader("📍 Position")
+        pos_data = api_get(f"{ROBOT_SERVICE}/robot/position")
+        if pos_data:
+            pos   = pos_data.get("position", {})
+            trans = pos.get("translation", {})
+            rot   = pos.get("rotation",    {})
+            p1, p2, p3 = st.columns(3)
+            p1.metric("X (m)", f"{trans.get('x', 0):.3f}")
+            p2.metric("Y (m)", f"{trans.get('y', 0):.3f}")
+            p3.metric("Z (m)", f"{trans.get('z', 0):.3f}")
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Quat X", f"{rot.get('x', 0):.4f}")
+            r2.metric("Quat Y", f"{rot.get('y', 0):.4f}")
+            r3.metric("Quat Z", f"{rot.get('z', 0):.4f}")
+            r4.metric("Quat W", f"{rot.get('w', 1):.4f}")
+            if pos_data.get("last_updated"):
+                st.caption(f"Updated: {pos_data['last_updated'][11:19]}")
+        elif not configured:
+            st.info("Configure robot credentials to see position data.")
+        else:
+            st.warning("Position data not yet available — trigger a poll.")
+
+        st.markdown("---")
+
+        # ── Diagnostics ─────────────────────────────────────────────────────────
+        st.subheader("🔬 Diagnostics")
+        diag_data = api_get(f"{ROBOT_SERVICE}/robot/diagnostics")
+        if diag_data:
+            diags = diag_data.get("diagnostics", [])
+            if diag_data.get("last_updated"):
+                st.caption(f"Updated: {diag_data['last_updated'][11:19]}  · {len(diags)} components")
+
+            _LEVEL_BADGE = {0: ("✅", "OK",   "#3fb950"),
+                            1: ("⚠️", "WARN", "#d29922"),
+                            2: ("❌", "ERROR","#f85149")}
+
+            for d in diags:
+                level   = d.get("level", 0)
+                icon, label, color = _LEVEL_BADGE.get(level, ("❓", str(level), "#888"))
+                name    = d.get("name", "Unknown")
+                message = d.get("message", "")
+                values  = d.get("values", [])
+
+                with st.expander(f"{icon} **{name}** — {message}", expanded=(level > 0)):
+                    st.markdown(
+                        f'<span style="color:{color}; font-weight:700;">{label}</span>',
+                        unsafe_allow_html=True,
+                    )
+                    if values:
+                        val_df = pd.DataFrame(values)
+                        if {"key", "value"}.issubset(val_df.columns):
+                            val_df = val_df.rename(columns={"key": "Metric", "value": "Value"})
+                        st.dataframe(val_df, width='stretch', hide_index=True)
+        elif not configured:
+            st.info("Configure robot credentials to see diagnostics.")
+        else:
+            st.warning("Diagnostics not yet available — trigger a poll or check credentials.")
+
+    # ── Auto-refresh ────────────────────────────────────────────────────────────
+    if configured and conn == "connected":
+        time.sleep(5)
+        st.rerun()
 
 
 st.markdown("---")

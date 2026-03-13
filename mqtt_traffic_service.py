@@ -16,6 +16,7 @@ This service is subscribe-only: it never publishes to the broker.
 import json
 import random
 import threading
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -44,6 +45,118 @@ _mqtt_status = {
     "messages_received": 0,
 }
 
+# ─── "Red triggered" sequence state ────────────────────────────────────────────
+_TRIGGER_PHRASE   = "red triggered"
+_TRIGGER_LIGHT_ID = "TRIGGERED_LIGHT"
+
+_trigger_stats = {
+    "total_triggers":   0,
+    "last_triggered":   None,
+    "cycles_completed": 0,
+}
+
+# Shared mutable state for the triggered light (also written into _lights).
+_triggered_state: dict = {
+    "id":              _TRIGGER_LIGHT_ID,
+    "intersection":    "Triggered Intersection",
+    "lat":             52.1205,
+    "lon":             11.6276,
+    "state":           "GREEN",
+    "phase":           "normal",
+    "time_in_state_s": 0,
+    "cycle_s":         24,          # 2+20+2 = 24 s fixed cycle
+    "topic":           MQTT_TOPIC,
+    "raw":             {},
+    "timestamp":       datetime.utcnow().isoformat() + "Z",
+    "sequence_active": False,
+}
+_lights[_TRIGGER_LIGHT_ID] = _triggered_state   # always present in /traffic/lights
+
+_trigger_lock   = threading.Lock()
+_cancel_event   = threading.Event()
+_sequence_thread: Optional[threading.Thread] = None
+
+
+def _set_triggered_state(state: str, duration_s: float) -> bool:
+    """
+    Transition the triggered light to *state*, increment time_in_state_s every
+    0.1 s, and return True when *duration_s* has elapsed.
+    Returns False early if _cancel_event is set (new trigger arrived).
+    """
+    now = datetime.utcnow().isoformat() + "Z"
+    with _trigger_lock:
+        _triggered_state["state"]           = state
+        _triggered_state["time_in_state_s"] = 0
+        _triggered_state["sequence_active"] = True
+        _triggered_state["timestamp"]       = now
+        _lights[_TRIGGER_LIGHT_ID]          = dict(_triggered_state)
+
+    start = time.monotonic()
+    while True:
+        elapsed = time.monotonic() - start
+        if elapsed >= duration_s:
+            with _trigger_lock:
+                _triggered_state["time_in_state_s"] = int(duration_s)
+                _lights[_TRIGGER_LIGHT_ID] = dict(_triggered_state)
+            return True
+        if _cancel_event.is_set():
+            return False
+        with _trigger_lock:
+            _triggered_state["time_in_state_s"] = int(elapsed)
+            _lights[_TRIGGER_LIGHT_ID] = dict(_triggered_state)
+        time.sleep(0.1)
+
+
+def _run_sequence():
+    """
+    Sequence on "red triggered":
+      YELLOW  2 s  → RED  20 s  → YELLOW  2 s  → GREEN  (until next trigger)
+    """
+    # Phase 1 – yellow pre-red
+    if not _set_triggered_state("YELLOW", 2):
+        return
+    # Phase 2 – red
+    if not _set_triggered_state("RED", 20):
+        return
+    # Phase 3 – yellow post-red
+    if not _set_triggered_state("YELLOW", 2):
+        return
+
+    # Phase 4 – green (open-ended; keep counting time_in_state_s)
+    now = datetime.utcnow().isoformat() + "Z"
+    with _trigger_lock:
+        _triggered_state["state"]           = "GREEN"
+        _triggered_state["time_in_state_s"] = 0
+        _triggered_state["sequence_active"] = False
+        _triggered_state["timestamp"]       = now
+        _lights[_TRIGGER_LIGHT_ID]          = dict(_triggered_state)
+        _trigger_stats["cycles_completed"] += 1
+
+    # Keep counting while waiting for the next trigger
+    start = time.monotonic()
+    while not _cancel_event.is_set():
+        with _trigger_lock:
+            _triggered_state["time_in_state_s"] = int(time.monotonic() - start)
+            _lights[_TRIGGER_LIGHT_ID] = dict(_triggered_state)
+        time.sleep(0.5)
+
+
+def _handle_red_triggered():
+    """Cancel any in-progress sequence and start a fresh one."""
+    global _sequence_thread
+    _cancel_event.set()
+    if _sequence_thread and _sequence_thread.is_alive():
+        _sequence_thread.join(timeout=1.0)
+    _cancel_event.clear()
+
+    now = datetime.utcnow().isoformat() + "Z"
+    with _trigger_lock:
+        _trigger_stats["total_triggers"] += 1
+        _trigger_stats["last_triggered"]  = now
+
+    _sequence_thread = threading.Thread(target=_run_sequence, daemon=True)
+    _sequence_thread.start()
+
 # ─── MQTT client setup ──────────────────────────────────────────────────────────
 _mqttc = mqtt.Client(client_id=f"traffic_service_{random.randint(1000,9999)}")
 
@@ -62,6 +175,32 @@ def _on_disconnect(client, userdata, rc):
 
 def _on_message(client, userdata, msg):
     raw_text = msg.payload.decode(errors="replace")
+    _mqtt_status["messages_received"] += 1
+
+    # ── "red triggered" command ──────────────────────────────────────────────
+    if _TRIGGER_PHRASE in raw_text.lower():
+        _handle_red_triggered()
+        # Record an event for history (include all columns the dashboard expects)
+        now = datetime.utcnow().isoformat() + "Z"
+        event = {
+            "id":              _TRIGGER_LIGHT_ID,
+            "intersection":    "Triggered Intersection",
+            "state":           "TRIGGERED",
+            "phase":           "normal",
+            "time_in_state_s": 0,
+            "cycle_s":         24,
+            "lat":             52.1205,
+            "lon":             11.6276,
+            "raw":             {"raw": raw_text},
+            "topic":           msg.topic,
+            "timestamp":       now,
+            "event_time":      now,
+        }
+        _events.append(event)
+        if len(_events) > _MAX_EVENTS:
+            _events.pop(0)
+        return
+    # ── end trigger handling ─────────────────────────────────────────────────
 
     # Try to parse as JSON; fall back to storing the raw string.
     try:
@@ -113,8 +252,6 @@ def _on_message(client, userdata, msg):
     _events.append(event)
     if len(_events) > _MAX_EVENTS:
         _events.pop(0)
-
-    _mqtt_status["messages_received"] += 1
 
 
 _mqttc.on_connect    = _on_connect
@@ -182,6 +319,23 @@ def get_summary():
 @app.get("/traffic/history")
 def get_history(limit: int = 100):
     return {"events": _events[-limit:], "total": len(_events)}
+
+
+@app.get("/traffic/triggered")
+def get_triggered():
+    """Current state of the 'red triggered' light plus trigger statistics."""
+    with _trigger_lock:
+        light = dict(_lights.get(_TRIGGER_LIGHT_ID, _triggered_state))
+    return {
+        "light":  light,
+        "stats":  dict(_trigger_stats),
+        "sequence": {
+            "yellow_pre_s":  2,
+            "red_s":         20,
+            "yellow_post_s": 2,
+            "green_s":       "until next trigger",
+        },
+    }
 
 
 @app.get("/traffic/raw")
