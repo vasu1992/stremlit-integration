@@ -1,6 +1,6 @@
 # Operations Control Center
 
-A microservices-based autonomous logistics platform with two complementary dashboards — a **Streamlit** operations dashboard and a **NiceGUI** real-time visualization app — covering user management, event analytics, AV fleet telemetry (Magdeburg, Germany), live LiDAR visualization via ROS/rosbridge, a built-in LiDAR simulator, a teleoperation interface with fleet integration, and a **live robot telemetry bridge** for Innok Robotics cloud-connected robots. No real robot required for most features.
+A microservices-based autonomous logistics platform with a **Streamlit** operations dashboard covering AV fleet telemetry (Magdeburg, Germany), live LiDAR visualization via ROS/rosbridge, a built-in LiDAR simulator, a teleoperation interface with fleet integration, MQTT-based traffic light monitoring, dual camera streaming (USB + WiFi IP camera), and a live robot telemetry bridge for Innok Robotics cloud-connected robots. No real robot required for most features.
 
 ---
 
@@ -8,47 +8,43 @@ A microservices-based autonomous logistics platform with two complementary dashb
 
 ```
 .
-├── streamlit_app.py          # Streamlit operations dashboard     (Port 8501)
-├── viz_app.py                # NiceGUI real-time visualization    (Port 8008)
-├── user_service.py           # User management service            (Port 8081)
-├── analytics_service.py      # Event analytics service            (Port 8082)
-├── vehicle_service.py        # AV fleet telemetry service         (Port 8004)
-├── lidar_service.py          # RViz LiDAR bridge service          (Port 8005)
-├── dummy_lidar_service.py    # Dummy LiDAR simulator service      (Port 8006)
-├── teleop_service.py         # Teleoperation interface service    (Port 8007)
-├── robot_telemetry_service.py# Innok Robotics cloud telemetry    (Port 8083)
-├── tugger train.png          # Home page vehicle image
-├── cargo.jpg                 # Home page vehicle image
-├── delivery robot.jpg        # Home page vehicle image
-├── requirements.txt          # Python dependencies
-└── README.md                 # This file
+├── streamlit_app.py              # Streamlit operations dashboard       (Port 8501)
+├── vehicle_service.py            # AV fleet telemetry service           (Port 8004)
+├── lidar_service.py              # RViz LiDAR bridge service            (Port 8005)
+├── dummy_lidar_service.py        # Dummy LiDAR simulator service        (Port 8006)
+├── teleop_service.py             # Teleoperation interface service      (Port 8007)
+├── mqtt_traffic_service.py       # MQTT traffic light service           (Port 8009)
+├── camera_service.py             # USB + WiFi IP camera stream service  (Port 8010)
+├── robot_telemetry_service.py    # Innok Robotics cloud telemetry       (Port 8083)
+├── traffic_dashboard.py          # Standalone traffic light dashboard   (Port 8511)
+├── tugger train.png              # Home page vehicle image
+├── cargo.jpg                     # Home page vehicle image
+├── delivery robot.jpg            # Home page vehicle image
+├── requirements.txt              # Python dependencies
+└── README.md                     # This file
 ```
 
 ---
 
+## Port Reference
+
+| Service | Port |
+|---------|------|
+| Streamlit Dashboard | 8501 |
+| Vehicle Service | 8004 |
+| LiDAR Bridge (real robot) | 8005 |
+| LiDAR Simulator | 8006 |
+| Teleop Service | 8007 |
+| MQTT Traffic Light Service | 8009 |
+| Camera Service (USB + IP) | 8010 |
+| Robot Telemetry Service | 8083 |
+| Traffic Light Dashboard (standalone) | 8511 |
+
+> **Windows note:** Ports 8001, 8002, 8011, 8012 are reserved by Hyper-V (WinError 10013). Avoid these.
+
+---
+
 ## Services Overview
-
-### User Service — Port 8081
-Manages a fleet of users stored in memory.
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | Health check |
-| `/users` | GET | List all users |
-| `/users` | POST | Create user `{name, email}` |
-| `/users/{id}` | GET | Get user by ID |
-| `/users/{id}` | DELETE | Delete user by ID |
-
-### Analytics Service — Port 8082
-Logs and summarises arbitrary named events with numeric values.
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | Health check |
-| `/events` | GET | List all events |
-| `/log` | POST | Log event `?event_name=&value=` |
-| `/summary` | GET | Aggregate stats (total, avg, min, max) |
-| `/events` | DELETE | Clear all events |
 
 ### Vehicle Telemetry Service — Port 8004
 Simulates and tracks telemetry for a fleet of 5 autonomous vehicles seeded around **Magdeburg, Germany (52.12°N, 11.63°E)**. Supports dynamic vehicle registration and teleop position sync.
@@ -83,7 +79,7 @@ Bridges a ROS2/ROS1 robot running `rosbridge_server` over WiFi to a REST API.
 | `/scan/history` | GET | Last 30 scan summaries |
 | `/config` | POST | Update `{robot_ip, robot_port, ros_topic}` and reconnect |
 
-**Default:** `ws://192.168.1.100:9090`, topic `/scan`. Auto-reconnects every 3s.
+**Default:** `ws://192.168.1.100:9090`, topic `/scan`. Auto-reconnects every 3 s.
 
 ### Dummy LiDAR Simulator — Port 8006
 Generates synthetic 2-D laser-scan data entirely in software — **no robot or ROS required**.
@@ -117,9 +113,49 @@ Simulates remote control of a differential-drive robot with fleet vehicle integr
 
 **GPS tracking:** When connected to a fleet vehicle, the robot's local x/y displacement is converted to absolute GPS (lat/lon) and synced back to the vehicle service after every movement command.
 
-### Robot Telemetry Service — Port 8083
+### MQTT Traffic Light Service — Port 8009
+Subscribes to a live MQTT broker (`service.ifak.eu:1883`, topic `iot_board/lsa/leitstelle`) and exposes real traffic-light data via REST. Subscribe-only — never publishes.
 
-Bridges an **Innok Robotics** cloud-connected robot to the local platform by polling the Innok REST API and caching the latest diagnostics and position data. Also accepts light-control commands that are forwarded to the robot's cloud API. Credentials are loaded from environment variables at startup and can be updated at runtime without restarting.
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Health check + MQTT connection status |
+| `/traffic/lights` | GET | Current state of all known traffic lights |
+| `/traffic/summary` | GET | Count by state (GREEN/YELLOW/RED), fault count |
+| `/traffic/history` | GET | Recent state-change events `?limit=200` |
+| `/traffic/raw` | GET | Last raw MQTT message (for debugging) |
+
+**MQTT details:** Broker `service.ifak.eu:1883` · Topic `iot_board/lsa/leitstelle` · Auto-reconnects on disconnect.
+
+### Camera Service — Port 8010
+Streams both a **local USB camera** and a **WiFi IP camera** (OCC_cam1) as MJPEG over HTTP. The IP camera RTSP URL is probed automatically across 14 common path patterns — no manual configuration needed.
+
+#### USB Camera endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Health check + USB camera status (resolution, FPS) |
+| `/cameras` | GET | List all available USB camera indices (probes 0–7) |
+| `/stream?index=N` | GET | Live MJPEG stream — embed with `<img src="...">` |
+| `/frame` | GET | Single JPEG frame as base64 JSON |
+| `/select` | POST | Switch active USB camera `{"index": N}` |
+
+#### WiFi IP Camera endpoints (OCC_cam1 @ 192.168.178.177)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/ip/health` | GET | Connection status, active RTSP URL, resolution, FPS |
+| `/ip/stream` | GET | Live MJPEG stream — embed with `<img src="...">` |
+| `/ip/frame` | GET | Single JPEG frame as base64 JSON |
+
+**IP camera credentials:** user `OCC_cam1` · password `OCC@1234` · IP `192.168.178.177`
+
+**Auto-probe RTSP paths** (tried in order, first success wins):
+`/stream1`, `/stream`, `/live`, `/video1`, `/` (root), `/onvif1`, Hikvision `/Streaming/Channels/101`, Dahua `/cam/realmonitor?channel=1&subtype=0`, Reolink `/live/ch00_0`, port 8554 variants, and HTTP MJPEG fallbacks.
+
+The active RTSP URL is reported in `/ip/health` → `active_url` and shown in the dashboard once connected.
+
+### Robot Telemetry Service — Port 8083
+Bridges an **Innok Robotics** cloud-connected robot to the local platform by polling the Innok REST API and caching the latest diagnostics and position data. Also accepts light-control commands forwarded to the robot's cloud API.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -128,14 +164,10 @@ Bridges an **Innok Robotics** cloud-connected robot to the local platform by pol
 | `/robot/diagnostics` | GET | Latest diagnostics (level, name, message, hardware_id, values) |
 | `/robot/position` | GET | Latest pose — translation `{x,y,z}` + rotation quaternion `{x,y,z,w}` |
 | `/robot/light` | GET | Current light state (`on` / `off`) and when it was last set |
-| `/robot/light` | POST | Set light `{"state": "on"\|"off"}` — forwards to robot API and caches state |
+| `/robot/light` | POST | Set light `{"state": "on"\|"off"}` — forwards to robot API |
 | `/robot/poll` | POST | Trigger an immediate poll now |
 | `/robot/config` | GET | Current config (password/apikey masked) |
 | `/robot/config` | POST | Update credentials or poll interval at runtime |
-
-**Innok API endpoints polled:**
-- `GET /state/diagnostics?apikey=...` — hardware component status with key/value metrics
-- `GET /state/position?apikey=...` — robot pose in a reference frame
 
 **Credential environment variables:**
 
@@ -150,29 +182,20 @@ Bridges an **Innok Robotics** cloud-connected robot to the local platform by pol
 
 **Diagnostics level codes:** `0` = OK · `1` = WARN · `2` = ERROR
 
-### NiceGUI Visualization App — Port 8008
-Real-time visualization dashboard with three auto-refreshing tabs.
-
-| Tab | Content | Refresh |
-|-----|---------|---------|
-| 🗺️ Fleet Map | Live vehicle markers on OpenStreetMap with status colours, KPI bar, hover telemetry | 3 s |
-| 🕹️ Teleop | 2×2 SVG camera feeds (FRONT/RIGHT/LEFT/REAR) + Plotly trail chart + status bar | 1.5 s |
-| 📡 LiDAR | Point cloud coloured by range, obstacles, room boundary toggle (Sim / Bridge) | 1.5 s |
-
 ---
 
-## Dashboard Pages (Streamlit)
+## Dashboard Pages (Streamlit — Port 8501)
 
 | Page | Description |
 |------|-------------|
-| 🏠 **Home** | Vehicle class showcase (Tugger Train, Cargo Bike, Delivery Robot), service health chips, quick fleet/event stats, link to NiceGUI Visualization |
-| 👥 **Users** | Create users, view table, refresh |
-| 📈 **Analytics** | Log events, summary metrics, value trend chart |
-| 🚗 **Fleet KPIs** | Simulate AV telemetry, KPI metrics, status donut chart, battery bars, speed trend, live Magdeburg position map, fleet table, register/deregister vehicles |
+| 🏠 **Home** | Vehicle class showcase, service health chips, quick fleet stats |
+| 🚗 **Fleet KPIs** | Simulate AV telemetry, KPI metrics, status donut, battery bars, speed trend, live Magdeburg position map, fleet table, register/deregister vehicles |
 | 📡 **LiDAR** | Live LiDAR point cloud from rosbridge, scan statistics, history chart |
 | 🤖 **LiDAR Sim** | Synthetic RViz-style point cloud: room boundary, range-coloured scan points, obstacle markers, live config, auto-refresh |
-| 🕹️ **Teleop** | Fleet vehicle connection panel, D-pad controls, camera feeds (4× synthetic SVG), robot trail chart, command history table, GPS sync to fleet map |
-| 🦾 **Robot** | Light on/off toggle (forwards command to Innok REST API), live position (translation + quaternion), diagnostics table with per-component status, credential config form |
+| 🕹️ **Teleop** | Fleet vehicle connection panel, D-pad controls, synthetic camera feeds (4× SVG), robot trail chart, command history, GPS sync to fleet map |
+| 🚦 **Traffic Lights** | Live MQTT traffic light grid (GREEN/YELLOW/RED), intersection map (folium), state-change timeline chart, recent events table, link to standalone dashboard |
+| 📷 **Camera** | Live USB camera MJPEG stream with index switcher + snapshots; Live WiFi IP camera (OCC_cam1) MJPEG stream with connection status + snapshots |
+| 🦾 **Robot** | Light on/off toggle, live position (translation + quaternion), diagnostics table, credential config form, auto-refresh when connected |
 
 ---
 
@@ -189,42 +212,48 @@ pip install -r requirements.txt
 Open a separate terminal for each service:
 
 ```bash
-# Terminal 1  (required)
-python user_service.py          # → http://localhost:8081
+# Terminal 1
+python vehicle_service.py           # → http://localhost:8004
 
-# Terminal 2  (required)
-python analytics_service.py     # → http://localhost:8082
+# Terminal 2  (optional — requires a ROS robot on the network)
+python lidar_service.py             # → http://localhost:8005
 
-# Terminal 3
-python vehicle_service.py       # → http://localhost:8004
+# Terminal 3  (optional — no robot needed)
+python dummy_lidar_service.py       # → http://localhost:8006
 
-# Terminal 4  (optional — requires a ROS robot on the network)
-python lidar_service.py         # → http://localhost:8005
+# Terminal 4  (optional)
+python teleop_service.py            # → http://localhost:8007
 
-# Terminal 5  (optional — no robot needed)
-python dummy_lidar_service.py   # → http://localhost:8006
+# Terminal 5  (optional — needs MQTT network access to service.ifak.eu)
+python mqtt_traffic_service.py      # → http://localhost:8009
 
-# Terminal 6  (optional — no robot needed)
-python teleop_service.py        # → http://localhost:8007
+# Terminal 6  (optional — USB camera or WiFi IP camera on same network)
+python camera_service.py            # → http://localhost:8010
 
-# Terminal 7  (optional — real-time NiceGUI visualization)
-python viz_app.py               # → http://localhost:8008
-
-# Terminal 8  (optional — Innok Robotics cloud robot bridge)
+# Terminal 7  (optional — Innok Robotics cloud robot bridge)
 INNOK_TENANT=myrobot INNOK_USER=user INNOK_PASSWORD=pass INNOK_APIKEY=XXXXX \
 python robot_telemetry_service.py   # → http://localhost:8083
 
+# Terminal 8  (optional — standalone traffic light dashboard)
+python traffic_dashboard.py         # → http://localhost:8511
+
 # Terminal 9  (Streamlit dashboard)
-streamlit run streamlit_app.py  # → http://localhost:8501
+streamlit run streamlit_app.py      # → http://localhost:8501
 ```
 
-> The Streamlit dashboard requires **User Service (8081)** and **Analytics Service (8082)** to be running. All other services are handled gracefully — the rest of the dashboard works if they are offline.
->
-> The Robot Telemetry Service can also be started without credentials — configure them later at runtime via `POST /robot/config`.
+> All services are optional — the dashboard degrades gracefully when a service is offline. `vehicle_service.py` is recommended as it powers the Home page stats and the Fleet KPIs page.
 
-### 3. Innok Robotics Setup (Real Robot Only)
+### 3. WiFi IP Camera Setup
 
-If you have an Innok Robotics cloud robot, configure credentials via env vars or at runtime:
+The camera service auto-discovers the RTSP stream path on startup. Ensure:
+1. Camera is powered on and connected to the same WiFi network (`192.168.178.x`)
+2. Camera service is running: `python camera_service.py`
+3. The terminal will print the working RTSP URL, e.g.:
+   `[IP cam] Connected: rtsp://OCC_cam1:OCC%401234@192.168.178.177:554/live`
+
+If none of the 14 candidate paths connect, the dashboard shows a warning. In that case, check your camera's RTSP path in its web interface and update `_IP_CAM_CANDIDATES` in [camera_service.py](camera_service.py).
+
+### 4. Innok Robotics Setup (Real Robot Only)
 
 ```bash
 # Option A — env vars at startup
@@ -237,18 +266,9 @@ python robot_telemetry_service.py
 curl -X POST http://localhost:8083/robot/config \
   -H "Content-Type: application/json" \
   -d '{"tenant":"myrobot","username":"user","password":"pass","apikey":"XXXXX"}'
-
-# Check connection status
-curl http://localhost:8083/robot/status
-
-# Fetch diagnostics
-curl http://localhost:8083/robot/diagnostics
-
-# Fetch position
-curl http://localhost:8083/robot/position
 ```
 
-### 4. LiDAR Setup (Real Robot Only)
+### 5. LiDAR Setup (Real Robot Only)
 
 On the ROS robot:
 ```bash
@@ -259,11 +279,11 @@ roslaunch rosbridge_server rosbridge_websocket.launch
 ros2 launch rosbridge_server rosbridge_websocket_launch.xml
 ```
 
-Then open **📡 LiDAR** in the dashboard → **⚙️ Connection Settings** → enter robot IP → **🔌 Apply & Reconnect**.
+Then open **📡 LiDAR** → **⚙️ Connection Settings** → enter robot IP → **🔌 Apply & Reconnect**.
 
 > For LiDAR without a robot, use **🤖 LiDAR Sim** instead.
 
-### 5. Teleop Fleet Integration
+### 6. Teleop Fleet Integration
 
 1. Start `vehicle_service.py` and `teleop_service.py`
 2. Navigate to **🕹️ Teleop** in the Streamlit dashboard
@@ -277,40 +297,26 @@ Then open **📡 LiDAR** in the dashboard → **⚙️ Connection Settings** →
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│               STREAMLIT Operations Dashboard  (Port 8501)                    │
-│  Home · Users · Analytics · Fleet KPIs · LiDAR · LiDAR Sim · Teleop         │
-└───┬──────────┬──────────┬─────────────┬────────────┬────────────┬────────────┘
-    │          │          │             │            │            │
-    ▼          ▼          ▼             ▼            ▼            ▼
-┌────────┐ ┌────────┐ ┌────────┐  ┌──────────┐ ┌──────────┐ ┌──────────┐
-│  User  │ │Analyt. │ │Vehicle │  │  LiDAR   │ │  Dummy   │ │  Teleop  │
-│  Svc   │ │  Svc   │ │  Svc   │  │  Bridge  │ │  LiDAR   │ │   Svc    │
-│ :8081  │ │ :8082  │ │ :8004  │  │  :8005   │ │  :8006   │ │  :8007   │
-└────────┘ └────────┘ └────────┘  └────┬─────┘ └──────────┘ └────┬─────┘
-               (Magdeburg, DE)         │ WebSocket          GPS sync │
-                                 ┌─────▼──────────────┐            │
-                                 │   ROS Robot         │            │
-                                 │ rosbridge_server    │            │
-                                 │    :9090 (WiFi)     │            │
-                                 └─────────────────────┘            │
-                                                                     ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                 NiceGUI Real-Time Visualization  (Port 8008)                 │
-│           Fleet Map  ·  Teleop Cameras + Trail  ·  LiDAR Point Cloud        │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────────────────────┐
-│              Robot Telemetry Service  (Port 8009)                            │
-│  Polls Innok Robotics cloud API · caches diagnostics + position              │
-└───────────────────────────────┬──────────────────────────────────────────────┘
-                                │ HTTPS / REST (polling)
-                    ┌───────────▼───────────┐
-                    │  Innok Robotics Cloud  │
-                    │  <tenant>.cloud.       │
-                    │  innok-robotics.de     │
-                    │  /api/v1/state/...     │
-                    └────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────────┐
+│              STREAMLIT Operations Dashboard  (Port 8501)                      │
+│  Home · Fleet KPIs · LiDAR · LiDAR Sim · Teleop · Traffic · Camera · Robot  │
+└──┬────────┬────────┬──────────┬────────┬──────────┬────────────┬─────────────┘
+   │        │        │          │        │          │            │
+   ▼        ▼        ▼          ▼        ▼          ▼            ▼
+┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌────────┐ ┌────────┐ ┌────────┐
+│Vehic.│ │LiDAR │ │Dummy │ │Teleop│ │ MQTT   │ │Camera  │ │ Robot  │
+│ Svc  │ │Bridge│ │LiDAR │ │ Svc  │ │Traffic │ │  Svc   │ │Teleme. │
+│:8004 │ │:8005 │ │:8006 │ │:8007 │ │ :8009  │ │ :8010  │ │ :8083  │
+└──────┘ └──┬───┘ └──────┘ └──┬───┘ └───┬────┘ └───┬────┘ └───┬────┘
+            │                  │         │           │           │
+            │ WebSocket   GPS sync  MQTT broker  USB cam   Innok Cloud
+            ▼                  ▼         ▼           ▼           ▼
+       ┌─────────┐       ┌─────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐
+       │ROS Robot│       │ Vehicle │ │service.  │ │ WiFi IP  │ │*.cloud.innok │
+       │rosbridge│       │ Service │ │ifak.eu   │ │ Camera   │ │-robotics.de  │
+       │:9090    │       │ :8004   │ │:1883     │ │192.168.. │ │OCC_cam1      │
+       └─────────┘       └─────────┘ └──────────┘ │.178.177  │ └──────────────┘
+                                                   └──────────┘
 ```
 
 ---
@@ -318,14 +324,6 @@ Then open **📡 LiDAR** in the dashboard → **⚙️ Connection Settings** →
 ## Example API Calls
 
 ```bash
-# Add a user
-curl -X POST "http://localhost:8081/users" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Jane", "email": "jane@example.com"}'
-
-# Log an analytics event
-curl -X POST "http://localhost:8082/log?event_name=purchase&value=99.5"
-
 # Simulate one AV telemetry step
 curl -X POST "http://localhost:8004/fleet/simulate"
 
@@ -352,6 +350,18 @@ curl -X POST "http://localhost:8006/config" \
   -H "Content-Type: application/json" \
   -d '{"room_width": 16.0, "room_height": 12.0, "num_obstacles": 5, "noise_std": 0.03}'
 
+# Traffic light summary
+curl "http://localhost:8009/traffic/summary"
+
+# Check camera service health (USB)
+curl "http://localhost:8010/"
+
+# Check WiFi IP camera connection + active RTSP URL
+curl "http://localhost:8010/ip/health"
+
+# Capture a single frame from the IP camera
+curl "http://localhost:8010/ip/frame"
+
 # Configure Innok robot credentials at runtime
 curl -X POST "http://localhost:8083/robot/config" \
   -H "Content-Type: application/json" \
@@ -360,24 +370,10 @@ curl -X POST "http://localhost:8083/robot/config" \
 # Get robot diagnostics
 curl "http://localhost:8083/robot/diagnostics"
 
-# Get robot position
-curl "http://localhost:8083/robot/position"
-
-# Trigger an immediate poll
-curl -X POST "http://localhost:8083/robot/poll"
-
 # Turn robot light on
 curl -X POST "http://localhost:8083/robot/light" \
   -H "Content-Type: application/json" \
   -d '{"state": "on"}'
-
-# Turn robot light off
-curl -X POST "http://localhost:8083/robot/light" \
-  -H "Content-Type: application/json" \
-  -d '{"state": "off"}'
-
-# Get current light state
-curl "http://localhost:8083/robot/light"
 ```
 
 ---
@@ -386,22 +382,26 @@ curl "http://localhost:8083/robot/light"
 
 | Package | Used by |
 |---------|---------|
-| fastapi | All services |
-| uvicorn | All services |
-| pydantic | All services |
-| websockets | lidar_service.py |
-| requests | streamlit_app.py, viz_app.py |
-| httpx | robot_telemetry_service.py |
-| streamlit | streamlit_app.py |
-| pandas | streamlit_app.py |
-| altair | streamlit_app.py |
-| nicegui | viz_app.py |
-| plotly | viz_app.py |
+| `fastapi` | All services |
+| `uvicorn` | All services |
+| `pydantic` | All services |
+| `requests` | streamlit_app.py |
+| `httpx` | robot_telemetry_service.py |
+| `websockets` | lidar_service.py |
+| `paho-mqtt` | mqtt_traffic_service.py |
+| `opencv-python` | camera_service.py (USB + RTSP streaming) |
+| `streamlit` | streamlit_app.py |
+| `pandas` | streamlit_app.py |
+| `altair` | streamlit_app.py |
 
 Install all at once:
 ```bash
 pip install -r requirements.txt
-# plus: nicegui plotly altair
+```
+
+Optional for interactive map on Traffic Lights page:
+```bash
+pip install folium streamlit-folium
 ```
 
 ---
@@ -410,17 +410,18 @@ pip install -r requirements.txt
 
 | Problem | Fix |
 |---------|-----|
-| Dashboard shows "Core services offline" | Start `user_service.py` (8081) and `analytics_service.py` (8082) first. |
-| Ports 8001/8002/8011/8012 blocked with WinError 10013 | Windows Hyper-V reserves these ports. Use ports 8081/8082 as configured. |
+| Ports 8001/8002/8011/8012 blocked (WinError 10013) | Windows Hyper-V reserves these ports. The project uses 8004–8010/8083 to avoid them. |
 | Fleet KPIs page shows error | Start `vehicle_service.py` in a separate terminal. |
-| Fleet positions show San Francisco | Restart `vehicle_service.py` — in-memory state from old run. |
-| LiDAR shows "🔴 Disconnected" | Expected when robot is off. Start `lidar_service.py`, set robot IP in Connection Settings. |
+| Fleet positions show wrong city | Restart `vehicle_service.py` — in-memory state from old run. |
+| LiDAR shows "🔴 Disconnected" | Expected when no robot. Start `lidar_service.py`, set robot IP in Connection Settings. |
 | LiDAR Sim page shows error | Start `dummy_lidar_service.py` in a separate terminal. |
 | Teleop page shows error | Start `teleop_service.py` in a separate terminal. |
 | Teleop robot won't move after E-Stop | Click **🔄 Reset to Origin** to clear the emergency stop. |
-| NiceGUI Viz page blank / error | Start `viz_app.py` then open `http://localhost:8008`. |
-| "Port already in use" | Another process holds the port. Kill it: `python -c "import subprocess; subprocess.run(['taskkill','/F','/IM','python.exe'])"` (Windows) or `pkill python` (Linux/Mac). |
+| Traffic Lights shows "MQTT Disconnected" | Start `mqtt_traffic_service.py`. Check outbound TCP access to `service.ifak.eu:1883`. |
+| Camera page shows "unavailable" | Start `camera_service.py`. For USB: plug in a USB camera. |
+| IP camera stream unavailable | Verify camera is on `192.168.178.x` WiFi. Check the terminal for `[IP cam]` probe output. If all 14 RTSP paths fail, look up your camera model's RTSP path and add it to `_IP_CAM_CANDIDATES` in `camera_service.py`. |
+| `taskkill` fails in Git Bash | Use: `python -c "import subprocess; subprocess.run(['taskkill', '/PID', '<pid>', '/F'])"` |
+| "Port already in use" | Kill the occupying process (see above). |
 | Streamlit doesn't open browser | Navigate manually to `http://localhost:8501`. |
-| Robot service shows "unconfigured" | No credentials set yet — `POST /robot/config` with `tenant`, `username`, `password`, `apikey`. |
-| Robot service shows "error" | Check `GET /robot/status` for the error message. Verify credentials, tenant name, and network access to `*.cloud.innok-robotics.de`. |
-| Robot position returns 503 "not yet available" | First poll hasn't succeeded yet — trigger one with `POST /robot/poll`. |
+| Robot service shows "unconfigured" | Set credentials via `POST /robot/config` or env vars. |
+| Robot position returns 503 "not yet available" | Trigger first poll: `curl -X POST http://localhost:8083/robot/poll`. |

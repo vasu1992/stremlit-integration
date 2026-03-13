@@ -15,13 +15,10 @@ st.set_page_config(
 )
 
 # ─── Service URLs ──────────────────────────────────────────────────────────────
-USER_SERVICE        = "http://localhost:8081"
-ANALYTICS_SERVICE   = "http://localhost:8082"
 VEHICLE_SERVICE     = "http://localhost:8004"
 LIDAR_SERVICE       = "http://localhost:8005"
 DUMMY_LIDAR_SERVICE = "http://localhost:8006"
 TELEOP_SERVICE      = "http://localhost:8007"
-VIZ_SERVICE         = "http://localhost:8008"
 TRAFFIC_SERVICE     = "http://localhost:8009"
 CAMERA_SERVICE      = "http://localhost:8010"
 ROBOT_SERVICE       = "http://localhost:8083"
@@ -201,27 +198,6 @@ def api_post(url: str, **kwargs):
     return r
 
 
-# ─── Service health gate ──────────────────────────────────────────────────────
-@st.cache_data(ttl=4)
-def _services_online() -> bool:
-    try:
-        requests.get(USER_SERVICE, timeout=1)
-        requests.get(ANALYTICS_SERVICE, timeout=1)
-        return True
-    except Exception:
-        return False
-
-
-if not _services_online():
-    st.error("⚠️ Core services offline — start User Service and Analytics Service first.")
-    st.info("""
-**Terminal 1:** `python user_service.py`
-**Terminal 2:** `python analytics_service.py`
-**Terminal 3:** `streamlit run streamlit_app.py`
-    """)
-    st.stop()
-
-
 # ─── Sidebar navigation ────────────────────────────────────────────────────────
 with st.sidebar:
     # ── Brand header ──
@@ -246,8 +222,6 @@ with st.sidebar:
     # ── Single flat navigation ──
     _all_pages = [
         "🏠 Home",
-        "👥 Users",
-        "📈 Analytics",
         "🚗 Fleet KPIs",
         "📡 LiDAR",
         "🤖 LiDAR Sim",
@@ -278,8 +252,6 @@ with st.sidebar:
 # ─── OCC banner (top of every page) ──────────────────────────────────────────
 _PAGE_ICONS = {
     "🏠 Home":      ("🏠", "Home"),
-    "👥 Users":     ("👥", "User Management"),
-    "📈 Analytics": ("📈", "Event Analytics"),
     "🚗 Fleet KPIs":("🚗", "Autonomous Vehicle Fleet — Magdeburg"),
     "📡 LiDAR":     ("📡", "LiDAR — RViz Bridge"),
     "🤖 LiDAR Sim": ("🤖", "LiDAR Simulator — Synthetic Scan"),
@@ -370,154 +342,30 @@ if page == "🏠 Home":
 
     sc1, sc2, sc3 = st.columns(3)
     with sc1:
-        _svc_chip("User Service",      USER_SERVICE,      "8081")
-        _svc_chip("Analytics Service", ANALYTICS_SERVICE, "8082")
-    with sc2:
         _svc_chip("Vehicle Service",   VEHICLE_SERVICE,   "8004")
         _svc_chip("LiDAR Bridge",      LIDAR_SERVICE,     "8005")
-    with sc3:
+    with sc2:
         _svc_chip("LiDAR Simulator",   DUMMY_LIDAR_SERVICE, "8006")
         _svc_chip("Teleop Service",    TELEOP_SERVICE,    "8007")
-        _svc_chip("NiceGUI Viz",       VIZ_SERVICE,       "8008")
-
-    st.markdown("")
-    st.link_button(
-        "🚀 Open Real-Time Visualization (NiceGUI)",
-        url="http://localhost:8008",
-        width='content',
-    )
+    with sc3:
+        _svc_chip("Traffic Service",   TRAFFIC_SERVICE,   "8009")
+        _svc_chip("Camera Service",    CAMERA_SERVICE,    "8010")
+        _svc_chip("Robot Service",     ROBOT_SERVICE,     "8083")
 
     st.markdown("---")
 
     # ── Quick stats ──────────────────────────────────────────────────────────
     st.markdown("#### Live Statistics")
-    sq1, sq2, sq3, sq4 = st.columns(4)
+    sq1, sq2 = st.columns(2)
     try:
-        users   = api_get(f"{USER_SERVICE}/users")
-        summary = api_get(f"{ANALYTICS_SERVICE}/summary")
-        kpis    = api_get(f"{VEHICLE_SERVICE}/fleet/kpis")
+        kpis = api_get(f"{VEHICLE_SERVICE}/fleet/kpis")
 
         with sq1:
-            st.metric("👥 Total Users",   users["users"].__len__() if users else "—")
+            st.metric("🚗 Active AVs",  kpis["active"] if kpis else "—")
         with sq2:
-            st.metric("📊 Total Events",  summary["total_events"] if summary else "—")
-        with sq3:
-            st.metric("🚗 Active AVs",    kpis["active"] if kpis else "—")
-        with sq4:
-            st.metric("🔋 Avg Battery",   f"{kpis['avg_battery_pct']} %" if kpis else "—")
+            st.metric("🔋 Avg Battery", f"{kpis['avg_battery_pct']} %" if kpis else "—")
     except Exception as e:
         st.error(f"Error loading statistics: {e}")
-
-
-# ==================== USERS PAGE ====================
-elif page == "👥 Users":
-
-    col1, col2 = st.columns([2, 1])
-
-    with col1:
-        st.subheader("Create New User")
-        with st.form("user_form"):
-            name  = st.text_input("Full Name",  placeholder="John Doe")
-            email = st.text_input("Email",       placeholder="john@example.com")
-            submit = st.form_submit_button("➕ Add User")
-
-            if submit:
-                if name and email:
-                    try:
-                        response = requests.post(
-                            f"{USER_SERVICE}/users",
-                            json={"name": name, "email": email},
-                        )
-                        if response.status_code == 200:
-                            api_get.clear()
-                            st.success(f"✅ User '{name}' added successfully!")
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-                else:
-                    st.warning("Please fill in all fields")
-
-    with col2:
-        st.subheader("Actions")
-        if st.button("🔄 Refresh"):
-            api_get.clear()
-            st.rerun()
-
-    st.subheader("All Users")
-    try:
-        data  = api_get(f"{USER_SERVICE}/users")
-        users = data["users"] if data else []
-
-        if users:
-            df = pd.DataFrame(users)
-            st.dataframe(df, width='stretch')
-        else:
-            st.info("No users found. Create one above!")
-    except Exception as e:
-        st.error(f"Error loading users: {e}")
-
-
-# ==================== ANALYTICS PAGE ====================
-elif page == "📈 Analytics":
-
-    col1, col2 = st.columns([3, 1])
-
-    with col1:
-        st.subheader("Log New Event")
-        with st.form("event_form"):
-            event_name = st.selectbox(
-                "Event Type",
-                ["page_view", "button_click", "form_submit", "purchase", "login", "custom"],
-            )
-            event_value = st.number_input("Event Value", min_value=0.0, step=0.1)
-            submit = st.form_submit_button("📝 Log Event")
-
-            if submit:
-                try:
-                    requests.post(
-                        f"{ANALYTICS_SERVICE}/log",
-                        params={"event_name": event_name, "value": event_value},
-                    )
-                    api_get.clear()
-                    st.success("✅ Event logged successfully!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
-
-    with col2:
-        st.subheader("Actions")
-        if st.button("🔄 Refresh"):
-            api_get.clear()
-            st.rerun()
-
-    st.subheader("Summary Statistics")
-    try:
-        summary = api_get(f"{ANALYTICS_SERVICE}/summary")
-        if summary:
-            c1, c2, c3, c4 = st.columns(4)
-            with c1: st.metric("Total Events", summary["total_events"])
-            with c2: st.metric("Average",       f"{summary['average_value']:.2f}")
-            with c3: st.metric("Min",           f"{summary['min_value']:.2f}")
-            with c4: st.metric("Max",           f"{summary['max_value']:.2f}")
-    except Exception as e:
-        st.error(f"Error loading summary: {e}")
-
-    st.subheader("All Events")
-    try:
-        data   = api_get(f"{ANALYTICS_SERVICE}/events")
-        events = data["events"] if data else []
-
-        if events:
-            df = pd.DataFrame(events)
-            st.dataframe(df, width='stretch')
-            st.subheader("Value Trend")
-            chart_df = df[["timestamp", "value"]].copy()
-            chart_df["timestamp"] = pd.to_datetime(chart_df["timestamp"])
-            st.line_chart(chart_df.set_index("timestamp"))
-        else:
-            st.info("No events logged yet. Create one above!")
-    except Exception as e:
-        st.error(f"Error loading events: {e}")
 
 
 # ==================== FLEET KPIs PAGE ====================
@@ -1517,7 +1365,7 @@ elif page == "📷 Camera":
     import base64 as _b64
     import streamlit.components.v1 as _components
 
-    st.title("📷 USB Camera Stream")
+    st.title("📷 Camera Streams")
 
     # ── Service health check ───────────────────────────────────────────────────
     cam_info = None
@@ -1533,11 +1381,24 @@ elif page == "📷 Camera":
         )
         st.stop()
 
+    # ── IP Camera health ───────────────────────────────────────────────────────
+    ip_cam_info = None
+    try:
+        ip_cam_info = requests.get(f"{CAMERA_SERVICE}/ip/health", timeout=3).json()
+    except Exception:
+        pass
+
+    st.markdown("---")
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # USB Camera section
+    # ═══════════════════════════════════════════════════════════════════════════
+    st.subheader("🔌 USB Camera")
+
     if not cam_info.get("camera_open"):
-        st.warning("Camera service is running but no camera is open.  "
+        st.warning("USB camera service is running but no camera is open.  "
                    "Check that a USB camera is connected.")
 
-    # ── Camera selector ────────────────────────────────────────────────────────
     col_sel, col_info = st.columns([1, 3])
     with col_sel:
         cam_list_data = None
@@ -1575,37 +1436,92 @@ elif page == "📷 Camera":
             _c2.metric("Camera index", cam_info.get("camera_index", 0))
             _c3.metric("FPS (reported)", f"{fps:.0f}")
 
-    st.markdown("---")
-
-    # ── Live stream embed (MJPEG in <img>) ────────────────────────────────────
-    stream_url = f"{CAMERA_SERVICE}/stream?index={selected_idx}"
     _bg = "#1e1e2e" if _dark else "#f5f5f5"
-    _html = f"""
+    usb_stream_url = f"{CAMERA_SERVICE}/stream?index={selected_idx}"
+    _usb_html = f"""
     <div style="background:{_bg}; padding:12px; border-radius:10px; text-align:center;">
       <img
-        src="{stream_url}"
-        alt="Live camera feed"
+        src="{usb_stream_url}"
+        alt="USB camera feed"
         style="max-width:100%; border-radius:8px; display:block; margin:auto;"
         onerror="this.alt='Stream unavailable — check camera_service.py';"
       />
       <p style="color:#888; font-size:0.75rem; margin-top:6px;">
-        Live MJPEG stream &middot; {stream_url}
+        Live MJPEG stream &middot; {usb_stream_url}
       </p>
     </div>
     """
-    _components.html(_html, height=520, scrolling=False)
+    _components.html(_usb_html, height=420, scrolling=False)
 
-    # ── Snapshot ───────────────────────────────────────────────────────────────
+    st.markdown("---")
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # WiFi IP Camera section (OCC_cam1 @ 192.168.178.177)
+    # ═══════════════════════════════════════════════════════════════════════════
+    st.subheader("📡 WiFi IP Camera — OCC_cam1 (192.168.178.177)")
+
+    if ip_cam_info is None:
+        st.error("⚠️ Could not reach IP camera endpoint. Make sure `camera_service.py` is running.")
+    elif not ip_cam_info.get("connected"):
+        st.warning(
+            "IP camera is not reachable. Verify the camera is powered on, "
+            "connected to the same WiFi network (192.168.178.x), and the RTSP "
+            "stream path in `camera_service.py` (`_IP_CAM_URL`) is correct for your camera model."
+        )
+    else:
+        _iw  = ip_cam_info.get("width",  "?")
+        _ih  = ip_cam_info.get("height", "?")
+        _ifs = ip_cam_info.get("fps",    0)
+        _ic1, _ic2, _ic3 = st.columns(3)
+        _ic1.metric("Resolution", f"{_iw} × {_ih}")
+        _ic2.metric("Camera", ip_cam_info.get("camera", "OCC_cam1"))
+        _ic3.metric("FPS (reported)", f"{_ifs:.0f}")
+        if ip_cam_info.get("active_url"):
+            st.caption(f"Connected via: `{ip_cam_info['active_url']}`")
+
+    ip_stream_url = f"{CAMERA_SERVICE}/ip/stream"
+    _ip_html = f"""
+    <div style="background:{_bg}; padding:12px; border-radius:10px; text-align:center;">
+      <img
+        src="{ip_stream_url}"
+        alt="WiFi IP camera feed"
+        style="max-width:100%; border-radius:8px; display:block; margin:auto;"
+        onerror="this.style.display='none'; document.getElementById('ip-cam-err').style.display='block';"
+      />
+      <div id="ip-cam-err" style="display:none; color:#f87171; padding:40px 20px; font-size:0.9rem;">
+        ⚠️ IP camera stream unavailable — check network connection and RTSP path in camera_service.py
+      </div>
+      <p style="color:#888; font-size:0.75rem; margin-top:6px;">
+        Live MJPEG stream &middot; OCC_cam1 &middot; {ip_stream_url}
+      </p>
+    </div>
+    """
+    _components.html(_ip_html, height=420, scrolling=False)
+
+    # ── Snapshot section ───────────────────────────────────────────────────────
     st.markdown("---")
     st.subheader("📸 Snapshot")
-    if st.button("Capture snapshot", key="cam_snap"):
-        try:
-            snap      = requests.get(f"{CAMERA_SERVICE}/frame", timeout=5).json()
-            img_bytes = _b64.b64decode(snap["frame"])
-            ts        = datetime.fromtimestamp(snap["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
-            st.image(img_bytes, caption=f"Snapshot at {ts}", width='stretch')
-        except Exception as e:
-            st.error(f"Snapshot failed: {e}")
+    _snap_col1, _snap_col2 = st.columns(2)
+
+    with _snap_col1:
+        if st.button("Capture USB snapshot", key="cam_snap"):
+            try:
+                snap      = requests.get(f"{CAMERA_SERVICE}/frame", timeout=5).json()
+                img_bytes = _b64.b64decode(snap["frame"])
+                ts        = datetime.fromtimestamp(snap["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
+                st.image(img_bytes, caption=f"USB snapshot at {ts}", width='stretch')
+            except Exception as e:
+                st.error(f"USB snapshot failed: {e}")
+
+    with _snap_col2:
+        if st.button("Capture IP camera snapshot", key="ip_cam_snap"):
+            try:
+                snap      = requests.get(f"{CAMERA_SERVICE}/ip/frame", timeout=5).json()
+                img_bytes = _b64.b64decode(snap["frame"])
+                ts        = datetime.fromtimestamp(snap["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
+                st.image(img_bytes, caption=f"OCC_cam1 snapshot at {ts}", width='stretch')
+            except Exception as e:
+                st.error(f"IP camera snapshot failed: {e}")
 
 
 # ==================== ROBOT PAGE ====================
