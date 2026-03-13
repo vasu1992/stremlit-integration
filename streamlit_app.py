@@ -22,6 +22,8 @@ LIDAR_SERVICE       = "http://localhost:8005"
 DUMMY_LIDAR_SERVICE = "http://localhost:8006"
 TELEOP_SERVICE      = "http://localhost:8007"
 VIZ_SERVICE         = "http://localhost:8008"
+TRAFFIC_SERVICE     = "http://localhost:8009"
+CAMERA_SERVICE      = "http://localhost:8010"
 
 # Magdeburg fleet base coordinates (mirrors vehicle_service.py)
 _BASE_LAT = 52.1205
@@ -249,6 +251,8 @@ with st.sidebar:
         "📡 LiDAR",
         "🤖 LiDAR Sim",
         "🕹️ Teleop",
+        "🚦 Traffic Lights",
+        "📷 Camera",
     ]
     page = st.radio("nav", _all_pages, label_visibility="collapsed", key="radio_nav")
 
@@ -278,6 +282,7 @@ _PAGE_ICONS = {
     "📡 LiDAR":     ("📡", "LiDAR — RViz Bridge"),
     "🤖 LiDAR Sim": ("🤖", "LiDAR Simulator — Synthetic Scan"),
     "🕹️ Teleop":    ("🕹️", "Teleoperation Interface"),
+    "🚦 Traffic Lights": ("🚦", "Traffic Light Monitor — MQTT"),
 }
 _icon, _title = _PAGE_ICONS.get(page, ("🎯", page))
 
@@ -1300,6 +1305,304 @@ elif page == "🕹️ Teleop":
 
     except Exception:
         st.error("⚠️ Teleoperation service unavailable. Start it with: `python teleop_service.py`")
+
+
+# ==================== TRAFFIC LIGHTS PAGE ====================
+if page == "🚦 Traffic Lights":
+
+    _TL_SERVICE_URL = TRAFFIC_SERVICE
+
+    # ── Connection status ───────────────────────────────────────────────────────
+    health_data = api_get(f"{_TL_SERVICE_URL}/")
+    if health_data is None:
+        st.error("⚠️ MQTT Traffic Light Service is offline. Start it with: `python mqtt_traffic_service.py`")
+        st.stop()
+
+    mqtt_info = health_data.get("mqtt", {})
+    connected = mqtt_info.get("connected", False)
+    broker    = mqtt_info.get("broker", "—")
+    topic     = mqtt_info.get("topic", "—")
+    msgs      = mqtt_info.get("messages_received", 0)
+
+    _conn_cls = "svc-ok" if connected else "svc-err"
+    _conn_lbl = "MQTT Connected" if connected else "MQTT Disconnected"
+    st.markdown(
+        f'<span class="svc-chip {_conn_cls}">⬤ {_conn_lbl}</span>',
+        unsafe_allow_html=True,
+    )
+    st.caption(f"Broker: **{broker}** · Topic: **{topic}** · Messages received: **{msgs}**")
+    st.link_button("🚦 Open Full MQTT Dashboard", url="http://localhost:8511", help="Standalone traffic light dashboard")
+
+    st.markdown("---")
+
+    # ── Fetch lights data ──────────────────────────────────────────────────────
+    lights_data   = api_get(f"{_TL_SERVICE_URL}/traffic/lights")
+    summary_data  = api_get(f"{_TL_SERVICE_URL}/traffic/summary")
+    history_data  = api_get(f"{_TL_SERVICE_URL}/traffic/history?limit=200")
+
+    lights  = (lights_data  or {}).get("lights",  [])
+    summary = summary_data or {}
+    events  = (history_data or {}).get("events", [])
+
+    # ── KPI row ────────────────────────────────────────────────────────────────
+    k1, k2, k3, k4, k5 = st.columns(5)
+    _by = summary.get("by_state", {})
+    k1.metric("Total Lights",  summary.get("total",   len(lights)))
+    k2.metric("🟢 Green",      _by.get("GREEN",  0))
+    k3.metric("🟡 Yellow",     _by.get("YELLOW", 0))
+    k4.metric("🔴 Red",        _by.get("RED",    0))
+    k5.metric("⚠️ Faults",     summary.get("faults", 0))
+
+    if not lights:
+        st.info(f"No traffic-light data yet — waiting for MQTT messages on `{topic}` from `{broker}`.")
+    else:
+        # ── Traffic-light grid ────────────────────────────────────────────────
+        st.subheader("Live Traffic Light States")
+
+        _STATE_COLOR  = {"GREEN": "#238636", "YELLOW": "#d29922", "RED": "#da3633"}
+        _STATE_BG     = {"GREEN": "rgba(35,134,54,0.12)",
+                         "YELLOW": "rgba(210,153,34,0.12)",
+                         "RED":    "rgba(218,54,51,0.12)"}
+        _STATE_BORDER = {"GREEN": "rgba(35,134,54,0.35)",
+                         "YELLOW": "rgba(210,153,34,0.35)",
+                         "RED":    "rgba(218,54,51,0.35)"}
+        _PHASE_BADGE  = {"fault":       "🔴 FAULT",
+                         "maintenance": "🔧 MAINT",
+                         "normal":      ""}
+
+        COLS = 4
+        rows = [lights[i:i+COLS] for i in range(0, len(lights), COLS)]
+
+        for row in rows:
+            grid_cols = st.columns(COLS, gap="small")
+            for col, lt in zip(grid_cols, row):
+                state   = lt.get("state", "RED")
+                phase   = lt.get("phase", "normal")
+                tis     = lt.get("time_in_state_s", 0)
+                cycle   = lt.get("cycle_s", 60)
+                pct     = min(100, int(tis / max(cycle, 1) * 100))
+                badge   = _PHASE_BADGE.get(phase, "")
+                bg      = _STATE_BG[state]
+                border  = _STATE_BORDER[state]
+                color   = _STATE_COLOR[state]
+                ts_raw  = lt.get("timestamp", "")
+                ts_disp = ts_raw[11:19] if len(ts_raw) >= 19 else ts_raw
+
+                col.markdown(
+                    f"""
+                    <div style="
+                        background:{bg}; border:1px solid {border};
+                        border-radius:12px; padding:14px 14px 10px 14px;
+                        margin-bottom:6px;">
+                      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                        <span style="font-size:0.78rem; font-weight:700; color:{color}; letter-spacing:1px;">{state}</span>
+                        <span style="font-size:0.7rem; color:#888;">{lt['id']}</span>
+                      </div>
+                      <div style="font-size:0.72rem; color:#aaa; margin-bottom:8px; line-height:1.4;">{lt.get('intersection','')}</div>
+                      <div style="background:#1e1e1e; border-radius:4px; height:6px; margin-bottom:6px;">
+                        <div style="background:{color}; width:{pct}%; height:6px; border-radius:4px;"></div>
+                      </div>
+                      <div style="display:flex; justify-content:space-between; font-size:0.68rem; color:#777;">
+                        <span>{tis}s / {cycle}s</span>
+                        <span>{badge or ts_disp}</span>
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+        # ── Map ────────────────────────────────────────────────────────────────
+        st.subheader("Intersection Map")
+
+        try:
+            import folium
+            from streamlit_folium import st_folium  # type: ignore
+
+            _map = folium.Map(
+                location=[52.1270, 11.6280], zoom_start=13,
+                tiles="CartoDB dark_matter" if _dark else "CartoDB positron",
+            )
+            _COLOR_MAP = {"GREEN": "green", "YELLOW": "orange", "RED": "red"}
+            for lt in lights:
+                clr  = _COLOR_MAP.get(lt.get("state", "RED"), "gray")
+                tis  = lt.get("time_in_state_s", 0)
+                html = (
+                    f"<b>{lt['id']}</b><br>"
+                    f"{lt.get('intersection','')}<br>"
+                    f"State: <b>{lt.get('state')}</b><br>"
+                    f"Phase: {lt.get('phase')}<br>"
+                    f"Time in state: {tis}s"
+                )
+                folium.CircleMarker(
+                    location=[lt["lat"], lt["lon"]],
+                    radius=10,
+                    color=clr, fill=True, fill_color=clr, fill_opacity=0.75,
+                    popup=folium.Popup(html, max_width=220),
+                    tooltip=f"{lt['id']}: {lt.get('state')}",
+                ).add_to(_map)
+
+            st_folium(_map, width=None, height=420, returned_objects=[])
+
+        except ImportError:
+            # folium not installed – show a plain table instead
+            if lights:
+                _map_df = pd.DataFrame([{
+                    "ID":           lt["id"],
+                    "Intersection": lt.get("intersection",""),
+                    "State":        lt.get("state",""),
+                    "Phase":        lt.get("phase",""),
+                    "Lat":          lt.get("lat"),
+                    "Lon":          lt.get("lon"),
+                } for lt in lights])
+                st.dataframe(_map_df, width='stretch', hide_index=True)
+                st.caption("Install `folium` and `streamlit-folium` for an interactive map.")
+
+        # ── State-change history chart ─────────────────────────────────────────
+        st.subheader("State-Change Timeline")
+        if events:
+            ev_df = pd.DataFrame(events)
+            ev_df["ts"] = pd.to_datetime(ev_df["event_time"], errors="coerce")
+            ev_df = ev_df.dropna(subset=["ts"])
+            ev_df = ev_df.sort_values("ts")
+            ev_df["ts_str"] = ev_df["ts"].dt.strftime("%H:%M:%S")
+
+            # Count transitions per state over time (1-minute buckets)
+            ev_df["minute"] = ev_df["ts"].dt.floor("1min")
+            bucket = (
+                ev_df.groupby(["minute", "state"])
+                .size()
+                .reset_index(name="count")
+            )
+            bucket["minute_str"] = bucket["minute"].dt.strftime("%H:%M")
+
+            _SCHEME = alt.Scale(
+                domain=["GREEN", "YELLOW", "RED"],
+                range=["#238636", "#d29922", "#da3633"],
+            )
+            chart = (
+                alt.Chart(bucket)
+                .mark_bar()
+                .encode(
+                    x=alt.X("minute_str:O", title="Time (1-min bucket)",
+                             axis=alt.Axis(labelAngle=-45)),
+                    y=alt.Y("count:Q", title="State-change events"),
+                    color=alt.Color("state:N", scale=_SCHEME, legend=alt.Legend(title="State")),
+                    tooltip=["minute_str:O", "state:N", "count:Q"],
+                )
+                .properties(width="container", height=220)
+            )
+            st.altair_chart(chart, width='stretch')
+
+            # Raw event table (most recent first)
+            st.subheader("Recent Events")
+            disp_df = ev_df[["event_time", "id", "intersection", "state", "phase",
+                              "time_in_state_s"]].copy()
+            disp_df = disp_df.sort_values("event_time", ascending=False).head(50)
+            disp_df.columns = ["Timestamp", "ID", "Intersection", "State",
+                                "Phase", "Time in State (s)"]
+            st.dataframe(disp_df, width='stretch', hide_index=True)
+        else:
+            st.info("No events recorded yet.")
+
+        # ── Auto-refresh ───────────────────────────────────────────────────────
+        time.sleep(2)
+        st.rerun()
+
+
+# ==================== CAMERA PAGE ====================
+elif page == "📷 Camera":
+    import base64 as _b64
+    import streamlit.components.v1 as _components
+
+    st.title("📷 USB Camera Stream")
+
+    # ── Service health check ───────────────────────────────────────────────────
+    cam_info = None
+    try:
+        cam_info = requests.get(f"{CAMERA_SERVICE}/", timeout=2).json()
+    except Exception:
+        pass
+
+    if cam_info is None:
+        st.error(
+            "⚠️ Camera service unavailable.  "
+            "Start it with: `python camera_service.py`"
+        )
+        st.stop()
+
+    if not cam_info.get("camera_open"):
+        st.warning("Camera service is running but no camera is open.  "
+                   "Check that a USB camera is connected.")
+
+    # ── Camera selector ────────────────────────────────────────────────────────
+    col_sel, col_info = st.columns([1, 3])
+    with col_sel:
+        cam_list_data = None
+        try:
+            cam_list_data = requests.get(f"{CAMERA_SERVICE}/cameras", timeout=3).json()
+        except Exception:
+            pass
+
+        available = (cam_list_data or {}).get("cameras", [0])
+        selected_idx = st.selectbox(
+            "Camera index",
+            options=available if available else [0],
+            index=0,
+            key="cam_idx",
+        )
+        if st.button("Switch camera", key="cam_switch"):
+            try:
+                requests.post(
+                    f"{CAMERA_SERVICE}/select",
+                    json={"index": selected_idx},
+                    timeout=3,
+                )
+                st.success(f"Switched to camera {selected_idx}")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Switch failed: {e}")
+
+    with col_info:
+        if cam_info.get("camera_open"):
+            w   = cam_info.get("width",  "?")
+            h   = cam_info.get("height", "?")
+            fps = cam_info.get("fps",    0)
+            _c1, _c2, _c3 = st.columns(3)
+            _c1.metric("Resolution", f"{w} × {h}")
+            _c2.metric("Camera index", cam_info.get("camera_index", 0))
+            _c3.metric("FPS (reported)", f"{fps:.0f}")
+
+    st.markdown("---")
+
+    # ── Live stream embed (MJPEG in <img>) ────────────────────────────────────
+    stream_url = f"{CAMERA_SERVICE}/stream?index={selected_idx}"
+    _bg = "#1e1e2e" if _dark else "#f5f5f5"
+    _html = f"""
+    <div style="background:{_bg}; padding:12px; border-radius:10px; text-align:center;">
+      <img
+        src="{stream_url}"
+        alt="Live camera feed"
+        style="max-width:100%; border-radius:8px; display:block; margin:auto;"
+        onerror="this.alt='Stream unavailable — check camera_service.py';"
+      />
+      <p style="color:#888; font-size:0.75rem; margin-top:6px;">
+        Live MJPEG stream &middot; {stream_url}
+      </p>
+    </div>
+    """
+    _components.html(_html, height=520, scrolling=False)
+
+    # ── Snapshot ───────────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("📸 Snapshot")
+    if st.button("Capture snapshot", key="cam_snap"):
+        try:
+            snap      = requests.get(f"{CAMERA_SERVICE}/frame", timeout=5).json()
+            img_bytes = _b64.b64decode(snap["frame"])
+            ts        = datetime.fromtimestamp(snap["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
+            st.image(img_bytes, caption=f"Snapshot at {ts}", width='stretch')
+        except Exception as e:
+            st.error(f"Snapshot failed: {e}")
 
 
 st.markdown("---")
